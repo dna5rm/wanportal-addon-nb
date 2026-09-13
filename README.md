@@ -104,6 +104,24 @@ hardcode no subject values.
 4. Health check for the proxy or load balancer: `GET /health` returns HTTP 200
    with `{"status":"ok"}`.
 
+## Adding pages without touching the SPA
+
+This addon is PHP. You can add tools without Vue, without AddonFrame, and
+without a SPA rebuild.
+
+1. Put a page under `app/` so it is served at `/nb/...` (for example
+   `app/reports/foo.php` at `/nb/reports/foo.php`).
+2. Link it in `app/src/chrome.php` (topnav and the footer). Those links are
+   hardcoded there, not read from a config file.
+3. Optional: in wanportal `htdocs/config.json`, add a menu item with
+   `"href": "/nb/reports/foo.php"`. Same-origin hrefs open in this tab. That
+   leaves the Vue shell and loads the PHP page. You do not need a hash route
+   or an iframe.
+
+The `/nb/` ProxyPass already covers every path under that prefix, including
+`/nb/cloud-api/`. Do not add a second prefix unless you are attaching a
+different sidecar.
+
 ## NetBox custom fields
 
 Certificate material is stored in netbox-dns record custom fields. Create the
@@ -127,7 +145,7 @@ build flow creates one (type `A`) in the matching zone.
 Bearer tokens are NetBox tokens. Callers of the `/nb/` API send:
 
 ```
-Authorization: Bearer <your NetBox API token>
+Authorization: Bearer your-netbox-api-token
 ```
 
 The sidecar validates the token against NetBox, then passes the same token to
