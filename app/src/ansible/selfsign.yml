@@ -1,0 +1,116 @@
+---
+# selfsign.yml - self-signed SSL certificate for wanportal.
+#
+# Assumes build.yml ran first: the netbox-dns record for common_name already
+# carries a private key (custom field ssl_privkey, a JSON object with privkey
+# and passphrase, ansible-vault encrypted under vault id netops). The playbook
+# reads the key back, generates a CSR, self-signs a certificate valid for 365
+# days and prints the PEM. Nothing is written back to NetBox here.
+#
+# Needs: python packages ansible and fqdn (see requirements.txt), env vars
+# VAULT_PASS, NETBOX_TOKEN and NETBOX_URL. Collections: community.general
+# (fqdn_valid test) and community.crypto (openssl_csr_pipe,
+# x509_certificate_pipe), both bundled with the ansible package.
+#
+# NetBox API paths (netbox-dns plugin):
+#   GET    /api/plugins/netbox-dns/records/?fqdn=<name>.
+#
+# Usage: ansible-playbook selfsign.yml -e "common_name=app.example.com owner_group=network-engineering"
+
+- name: "SSL Self-Signed Certificate Generate"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    vault_pass:   "{{ lookup('env', 'VAULT_PASS') }}"
+    netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') }}"
+    netbox_url:   "{{ lookup('env', 'NETBOX_URL') }}"
+    # Certificate subject details come from the environment (SSL_CSR_*),
+    # exported by run_script() from config.php - the single source of truth.
+    # Override per invocation with -e if needed.
+    ssl_request:
+      countryName:          "{{ lookup('env', 'SSL_CSR_COUNTRY')  | default('US', true) }}"
+      stateOrProvinceName:  "{{ lookup('env', 'SSL_CSR_STATE')    | default('California', true) }}"
+      localityName:         "{{ lookup('env', 'SSL_CSR_LOCALITY') | default('Example City', true) }}"
+      organizationName:     "{{ lookup('env', 'SSL_CSR_ORG')      | default('Example Org', true) }}"
+      OrganizationalUnit:   "{{ lookup('env', 'SSL_CSR_OU')       | default('IT', true) }}"
+      keyUsage:             ["keyEncipherment", "dataEncipherment"]
+      extendedKeyUsage:     ["serverAuth"]
+
+  tasks:
+
+    - name: Assert that common_name is a valid FQDN
+      ansible.builtin.assert:
+        that: common_name is community.general.fqdn_valid
+        fail_msg: "{{ common_name }} is not a valid FQDN"
+        quiet: true
+
+    # --- Fetch existing DNS record from NetBox ---
+
+    - name: Fetch DNS record from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/plugins/netbox-dns/records/?fqdn={{ common_name | lower }}."
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: false
+      register: netbox_record_lookup
+
+    - name: Set existing record fact
+      ansible.builtin.set_fact:
+        netbox_record: "{{ netbox_record_lookup.json.results[0] | default(None) }}"
+
+    - name: Assert DNS record exists in NetBox
+      ansible.builtin.assert:
+        that: netbox_record is not none
+        fail_msg: "No DNS record found for {{ common_name }} in NetBox - please run Build first"
+        quiet: true
+
+    - name: Assert ssl_privkey exists in NetBox record
+      ansible.builtin.assert:
+        that:
+          - netbox_record.custom_fields.ssl_privkey is defined
+          - netbox_record.custom_fields.ssl_privkey.privkey | default('') | length > 0
+        fail_msg: "No private key found in NetBox for {{ common_name }} - please run Build first"
+        quiet: true
+
+    # --- Decrypt private key from NetBox ---
+
+    - name: Decrypt ssl_privkey from NetBox
+      ansible.builtin.set_fact:
+        ssl_content:
+          privkey:    "{{ netbox_record.custom_fields.ssl_privkey.privkey | unvault(vault_pass) }}"
+          passphrase: "{{ netbox_record.custom_fields.ssl_privkey.passphrase | unvault(vault_pass) }}"
+
+    # --- Generate CSR ---
+
+    - name: Generate CSR
+      community.crypto.openssl_csr_pipe:
+        privatekey_content:    "{{ ssl_content.privkey }}"
+        privatekey_passphrase: "{{ ssl_content.passphrase }}"
+        common_name: "{{ common_name }}"
+        subject:
+          C:  "{{ countryName | default(ssl_request.countryName) }}"
+          ST: "{{ stateOrProvinceName | default(ssl_request.stateOrProvinceName) }}"
+          L:  "{{ localityName | default(ssl_request.localityName) }}"
+          O:  "{{ organizationName | default(ssl_request.organizationName) }}"
+          OU: "{{ owner_group | default(ssl_request.OrganizationalUnit) }}"
+        subject_alt_name: "{{ alt_names | default([]) | map('regex_replace', '^(.*)', 'DNS:\\1') | list }}"
+      register: csr_result
+
+    # --- Generate self-signed certificate ---
+
+    - name: Generate self-signed certificate
+      community.crypto.x509_certificate_pipe:
+        csr_content:             "{{ csr_result.csr }}"
+        privatekey_content:      "{{ ssl_content.privkey }}"
+        privatekey_passphrase:   "{{ ssl_content.passphrase }}"
+        provider:                selfsigned
+        selfsigned_not_after:    "+365d"
+      register: selfsign_result
+
+    - name: Display self-signed certificate
+      ansible.builtin.debug:
+        msg: "{{ selfsign_result.certificate }}"
+      tags: [print_action]

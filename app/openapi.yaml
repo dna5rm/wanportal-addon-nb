@@ -1,0 +1,399 @@
+openapi: "3.0.3"
+info:
+  title: SSL Certificate Manager
+  description: >
+    API for managing SSL certificates. Certificates and private keys are stored
+    in NetBox DNS records as custom fields. Build, show, import and self-sign
+    operations are executed via Ansible playbooks on the backend.
+  version: "1.0.0"
+  contact:
+    name: IT Operations - Network Engineering
+    email: networkengineering@example.com
+
+servers:
+  - url: /nb
+    description: Production
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/build:
+    post:
+      summary: Build Private Key & CSR
+      description: >
+        Generates a new private key and CSR via Ansible. If a private key already
+        exists in NetBox for the given FQDN it will be reused. The DNS record will
+        be created in NetBox if it does not exist. Returns the CSR for submission
+        to a CA. Concurrent builds for the same common_name are blocked.
+      operationId: buildCertificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BuildRequest'
+            example:
+              common_name: myapp.example.com
+              owner_group: network-engineering
+              reference_number: INC0012345
+              subject_alt_names:
+                - alias1.example.com
+                - alias2.example.com
+      responses:
+        '200':
+          description: CSR generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuildResponse'
+            text/plain:
+              schema:
+                type: string
+                description: Ansible output including CSR for submission to CA
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/show:
+    post:
+      summary: Show an existing SSL certificate
+      description: >
+        Retrieves and decrypts the certificate, private key and passphrase for a
+        given FQDN from NetBox. Accept text/plain for human readable output or
+        application/json for programmatic access.
+      operationId: showCertificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CommonNameRequest'
+            example:
+              common_name: myapp.example.com
+      responses:
+        '200':
+          description: Certificate retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ShowResponse'
+            text/plain:
+              schema:
+                type: string
+                description: Human readable certificate, private key and passphrase
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+
+  /api/import:
+    post:
+      summary: Import a signed certificate
+      description: >
+        Validates a signed certificate against the existing private key in NetBox
+        and imports it. The certificate CN must match the common_name provided and
+        the certificate public key must match the private key on record.
+      operationId: importCertificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImportRequest'
+            example:
+              common_name: myapp.example.com
+              certificate: |
+                -----BEGIN CERTIFICATE-----
+                MIIGyjCCBbKgAwIBAgIEX12m5j...
+                -----END CERTIFICATE-----
+      responses:
+        '200':
+          description: Certificate imported successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImportResponse'
+            text/plain:
+              schema:
+                type: string
+                description: Ansible output
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+  /api/selfsign:
+    post:
+      summary: Generate a self-signed certificate
+      description: >
+        Generates a self-signed certificate from the existing private key stored
+        in NetBox. The certificate is valid for 365 days and is returned to the
+        user only - it is never stored in NetBox. Requires a prior Build to have
+        been run for the given FQDN.
+      operationId: selfSignCertificate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SelfSignRequest'
+            example:
+              common_name: myapp.example.com
+              owner_group: network-engineering
+              subject_alt_names:
+                - alias1.example.com
+                - alias2.example.com
+      responses:
+        '200':
+          description: Self-signed certificate generated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SelfSignResponse'
+            text/plain:
+              schema:
+                type: string
+                description: Ansible output including self-signed certificate
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: NetBox API token used as Bearer token
+
+  schemas:
+    CommonNameRequest:
+      type: object
+      required:
+        - common_name
+      properties:
+        common_name:
+          type: string
+          description: The FQDN of the certificate
+          example: myapp.example.com
+
+    BuildRequest:
+      type: object
+      required:
+        - common_name
+        - owner_group
+      properties:
+        common_name:
+          type: string
+          description: The FQDN for the SSL certificate
+          example: myapp.example.com
+        owner_group:
+          type: string
+          description: Team or department responsible for this certificate
+          example: network-engineering
+        reference_number:
+          type: string
+          description: Optional IDM reference number
+          example: INC0012345
+        subject_alt_names:
+          type: array
+          description: Additional FQDNs to include in the certificate SAN
+          items:
+            type: string
+          example:
+            - alias1.example.com
+            - alias2.example.com
+
+    SelfSignRequest:
+      type: object
+      required:
+        - common_name
+        - owner_group
+      properties:
+        common_name:
+          type: string
+          description: The FQDN for the SSL certificate
+          example: myapp.example.com
+        owner_group:
+          type: string
+          description: Team or department responsible for this certificate
+          example: network-engineering
+        subject_alt_names:
+          type: array
+          description: Additional FQDNs to include in the certificate SAN
+          items:
+            type: string
+          example:
+            - alias1.example.com
+            - alias2.example.com
+
+    ImportRequest:
+      type: object
+      required:
+        - common_name
+        - certificate
+      properties:
+        common_name:
+          type: string
+          description: The FQDN of the certificate
+          example: myapp.example.com
+        certificate:
+          type: string
+          description: PEM encoded signed certificate
+          example: |
+            -----BEGIN CERTIFICATE-----
+            MIIGyjCCBbKgAwIBAgIEX12m5j...
+            -----END CERTIFICATE-----
+
+    BuildResponse:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [build]
+        common_name:
+          type: string
+        csr:
+          type: string
+          description: PEM encoded certificate signing request
+        output:
+          type: string
+          description: Raw Ansible playbook output
+        success:
+          type: boolean
+
+    ShowResponse:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [show]
+        common_name:
+          type: string
+        certificate:
+          type: string
+          description: PEM encoded certificate
+          nullable: true
+        privkey:
+          type: string
+          description: Decrypted private key
+          nullable: true
+        passphrase:
+          type: string
+          description: Decrypted passphrase
+          nullable: true
+
+    ImportResponse:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [import]
+        common_name:
+          type: string
+        exit_code:
+          type: integer
+        success:
+          type: boolean
+
+    SelfSignResponse:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [selfsign]
+        common_name:
+          type: string
+        certificate:
+          type: string
+          description: PEM encoded self-signed certificate valid for 365 days
+        output:
+          type: string
+          description: Raw Ansible playbook output
+        success:
+          type: boolean
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Missing or invalid request parameters
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: common_name is required
+
+    Unauthorized:
+      description: Missing or invalid NetBox API token
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Invalid or expired NetBox token
+
+    NotFound:
+      description: DNS record not found in NetBox
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: No DNS record found for myapp.example.com
+
+    MethodNotAllowed:
+      description: HTTP method not allowed
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Method not allowed
+
+    Conflict:
+      description: A build is already in progress for this common_name
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: A build is already in progress for myapp.example.com
+
+    InternalError:
+      description: Internal server error
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            error: Script not found or not executable

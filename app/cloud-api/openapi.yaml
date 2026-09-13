@@ -1,0 +1,316 @@
+openapi: 3.0.0
+info:
+  title: NetBox:Cloud-API Documentation
+  description: API for managing IP address reservations in NetBox
+  version: 2.0.0
+
+servers:
+  - url: /nb/cloud-api
+    description: This host
+
+paths:
+  /reservation:
+    post:
+      summary: Create or retrieve an IP reservation
+      description: Creates a new container and reserves IP blocks for an account in a specific region, or returns the existing reservation if one already exists
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - account
+                - region
+                - environment
+                - account_id
+                - size
+              properties:
+                account:
+                  type: string
+                  description: Account identifier
+                  example: example01
+                region:
+                  type: string
+                  description: AWS region
+                  example: eu-west-1
+                environment:
+                  type: string
+                  description: Environment name
+                  example: aws-development
+                account_id:
+                  type: integer
+                  description: Account ID
+                  example: 123456789012
+                size:
+                  type: integer
+                  description: Subnet Size
+                  example: 24
+      responses:
+        '200':
+          description: Reservation Successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservationResponse'
+        '400':
+          description: Invalid input parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    get:
+      summary: Get reservation details
+      description: Returns reservation details for the given account and region. Accepts parameters as query string or request body.
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: account
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Account identifier
+          example: example01
+        - name: region
+          in: query
+          required: true
+          schema:
+            type: string
+          description: AWS region
+          example: eu-west-1
+      responses:
+        '200':
+          description: Reservation details retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReservationResponse'
+        '400':
+          description: Invalid input parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Reservation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      summary: Delete a reservation
+      description: Deletes an existing IP reservation and its blocks
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - account
+                - region
+              properties:
+                account:
+                  type: string
+                  description: Account identifier
+                  example: example01
+                region:
+                  type: string
+                  description: AWS region
+                  example: eu-west-1
+      responses:
+        '200':
+          description: Reservation deleted successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SuccessResponse'
+        '400':
+          description: Invalid input parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: Reservation not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /free-blocks:
+    get:
+      summary: Get free blocks in parent container
+      description: Lists all available free blocks in a parent container
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: environment
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Environment name
+          example: aws-development
+        - name: region
+          in: query
+          required: true
+          schema:
+            type: string
+          description: AWS region
+          example: eu-west-1
+      responses:
+        '200':
+          description: Free blocks retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FreeBlocksResponse'
+        '400':
+          description: Invalid input parameters
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '500':
+          description: Server error
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: |
+        Static bearer token from config.php, the intended auth for this
+        single-operator API. Send it in the Authorization header:
+        
+        Authorization: Bearer REPLACE_WITH_BEARER_TOKEN
+  schemas:
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Operation completed successfully
+        data:
+          type: object
+
+    ErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: false
+        message:
+          type: string
+          example: Error message description
+        data:
+          type: object
+          nullable: true
+
+    ReservationResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Reserved successfully
+        data:
+          type: object
+          properties:
+            account:
+              type: string
+              example: example01
+            account_id:
+              type: integer
+              example: 123456789012
+            environment:
+              type: string
+              example: aws-development
+            region:
+              type: string
+              example: eu-west-1
+            container:
+              type: string
+              example: example01-eu-west-1
+            block_result:
+              type: array
+              items:
+                type: object
+                properties:
+                  blockAddr:
+                    type: string
+                    example: "192.0.2.0"
+                  blockSize:
+                    type: string
+                    example: "24"
+
+    FreeBlocksResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          example: true
+        message:
+          type: string
+          example: Free blocks retrieved successfully
+        data:
+          type: object
+          properties:
+            parent_container:
+              type: string
+              example: 198.51.0.0/16
+            total_blocks:
+              type: integer
+              example: 3
+            blocks:
+              type: array
+              items:
+                type: object
+                properties:
+                  blockAddr:
+                    type: string
+                    example: 192.0.2.0
+                  blockSize:
+                    type: string
+                    example: "24"
+                  blockStatus:
+                    type: string
+                    example: Free
+                  blockName:
+                    type: string
+                    example: 192.0.2.0/24

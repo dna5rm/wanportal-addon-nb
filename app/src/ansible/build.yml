@@ -1,0 +1,213 @@
+---
+# build.yml - SSL certificate build for wanportal.
+#
+# Runs locally and talks to the NetBox REST API. For a given common_name it
+# looks up the FQDN in netbox-dns, reuses the private key already stored on
+# the record (custom field ssl_privkey, a JSON object with privkey and
+# passphrase, both ansible-vault encrypted under vault id netops) or generates
+# a fresh 4096 bit RSA key with a random passphrase, resolves the FQDN to an
+# IP with community.general.dig (falls back to 127.0.0.1), creates or updates
+# the netbox-dns A record with the encrypted key, and prints a CSR to hand to
+# your CA. Sign the certificate, then run import.yml. A reference number, if
+# given, becomes the CSR CN instead of the FQDN.
+#
+# Needs: python packages ansible, dnspython and fqdn (see requirements.txt),
+# env vars VAULT_PASS, NETBOX_TOKEN and NETBOX_URL. Collections: community.general
+# (fqdn_valid test, dig lookup) and community.crypto (openssl_privatekey_pipe,
+# openssl_csr_pipe, vault and unvault filters), both bundled with the ansible
+# package.
+#
+# NetBox API paths (netbox-dns plugin):
+#   GET    /api/plugins/netbox-dns/records/?fqdn=<name>.
+#   GET    /api/plugins/netbox-dns/zones/?limit=1000
+#   POST   /api/plugins/netbox-dns/records/
+#   PATCH  /api/plugins/netbox-dns/records/<record id>/
+#
+# Usage: ansible-playbook build.yml -e "common_name=app.example.com owner_group=network-engineering"
+
+- name: "SSL Certificate Generate"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    vault_pass:    "{{ lookup('env', 'VAULT_PASS') }}"
+    netbox_token:  "{{ lookup('env', 'NETBOX_TOKEN') }}"
+    netbox_url:    "{{ lookup('env', 'NETBOX_URL') }}"
+    # Certificate subject details come from the environment (SSL_CSR_*,
+    # SSL_KEY_SIZE, SSL_VAULT_ID), exported by run_script() from config.php -
+    # the single source of truth. Override per invocation with -e if needed.
+    ssl_key:
+      cipher: auto
+      size:   "{{ lookup('env', 'SSL_KEY_SIZE') | default('4096', true) | int }}"
+      type:   RSA
+    ssl_request:
+      countryName:          "{{ lookup('env', 'SSL_CSR_COUNTRY')  | default('US', true) }}"
+      stateOrProvinceName:  "{{ lookup('env', 'SSL_CSR_STATE')    | default('California', true) }}"
+      localityName:         "{{ lookup('env', 'SSL_CSR_LOCALITY') | default('Example City', true) }}"
+      organizationName:     "{{ lookup('env', 'SSL_CSR_ORG')      | default('Example Org', true) }}"
+      OrganizationalUnit:   "{{ lookup('env', 'SSL_CSR_OU')       | default('IT', true) }}"
+      keyUsage:             ["keyEncipherment", "dataEncipherment"]
+      extendedKeyUsage:     ["serverAuth"]
+    ssl_vault_id: "{{ lookup('env', 'SSL_VAULT_ID') | default('netops', true) }}"
+
+  tasks:
+
+    - name: Assert that common_name is a valid FQDN
+      ansible.builtin.assert:
+        that: common_name is community.general.fqdn_valid
+        fail_msg: "{{ common_name }} is not a valid FQDN"
+        quiet: true
+
+    # --- NetBox: Fetch existing DNS record ---
+
+    - name: Fetch DNS record from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/plugins/netbox-dns/records/?fqdn={{ common_name | lower }}."
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: false
+      register: netbox_record_lookup
+
+    - name: Set existing record fact
+      ansible.builtin.set_fact:
+        netbox_record: "{{ netbox_record_lookup.json.results[0] | default(None) }}"
+
+    # --- Read existing private key from NetBox if it exists ---
+
+    - name: Read existing ssl_privkey from NetBox
+      ansible.builtin.set_fact:
+        ssl_content:
+          privkey:    "{{ netbox_record.custom_fields.ssl_privkey.privkey | unvault(vault_pass) }}"
+          passphrase: "{{ netbox_record.custom_fields.ssl_privkey.passphrase | unvault(vault_pass) }}"
+      when:
+        - netbox_record is not none
+        - netbox_record.custom_fields.ssl_privkey is defined
+        - netbox_record.custom_fields.ssl_privkey.privkey | default('') | length > 0
+
+    # --- Generate new private key if one does not exist ---
+
+    - name: Generate new passphrase
+      ansible.builtin.set_fact:
+        passphrase: "{{ lookup('ansible.builtin.password', '/dev/null', chars=['ascii_letters', 'digits', '!@#$%^&*()'], length=30) }}"
+      when: ssl_content is not defined
+
+    - name: Generate new private key
+      community.crypto.openssl_privatekey_pipe:
+        passphrase: "{{ passphrase }}"
+        cipher:     "{{ ssl_key.cipher }}"
+        size:       "{{ ssl_key.size | int }}"
+        type:       "{{ ssl_key.type }}"
+      register: key_result
+      when: ssl_content is not defined
+
+    - name: Set ssl_content from new key
+      ansible.builtin.set_fact:
+        ssl_content:
+          passphrase: "{{ passphrase }}"
+          privkey:    "{{ key_result.privatekey }}"
+      when: ssl_content is not defined
+
+    - name: Assert ssl_content is valid
+      ansible.builtin.assert:
+        that:
+          - ssl_content is defined
+          - ssl_content.privkey is defined
+          - ssl_content.passphrase is defined
+        fail_msg: "Failed to load or generate ssl_content!"
+        quiet: true
+
+    # --- Resolve IP address for DNS record ---
+
+    - name: Resolve IP address for common_name
+      ansible.builtin.set_fact:
+        resolved_ip: "{{ lookup('community.general.dig', common_name) | default('127.0.0.1') }}"
+
+    - name: Default to 127.0.0.1 if unresolved
+      ansible.builtin.set_fact:
+        resolved_ip: "127.0.0.1"
+      when: resolved_ip == 'NXDOMAIN' or resolved_ip == '' or resolved_ip is none
+
+    # --- Upsert NetBox DNS record ---
+
+    - name: Fetch all DNS zones from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/plugins/netbox-dns/zones/?limit=1000"
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: false
+      register: netbox_zones
+
+    - name: Match zone for common_name
+      ansible.builtin.set_fact:
+        matched_zone: "{{ netbox_zones.json.results | selectattr('name', 'in', common_name) | sort(attribute='name') | last }}"
+
+    - name: Create DNS record in NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/plugins/netbox-dns/records/"
+        method: POST
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        body_format: json
+        body:
+          name:   "{{ common_name | regex_replace('\\.' + matched_zone.name + '$', '') }}"
+          zone:   "{{ matched_zone.id }}"
+          type:   "A"
+          value:  "{{ resolved_ip }}"
+          status: "active"
+          custom_fields:
+            # ssl_owner: "{{ owner_group | default(omit) }}"
+            ssl_privkey:
+              privkey:    "{{ ssl_content.privkey | vault(vault_pass, vault_id=ssl_vault_id) }}"
+              passphrase: "{{ ssl_content.passphrase | vault(vault_pass, vault_id=ssl_vault_id) }}"
+        validate_certs: false
+        status_code: 201
+      when: netbox_record is none
+      register: netbox_create
+
+    - name: Update ssl_privkey in NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/plugins/netbox-dns/records/{{ netbox_record.id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        body_format: json
+        body:
+          custom_fields:
+            # ssl_owner: "{{ owner_group | default(omit) }}"
+            ssl_privkey:
+              privkey:    "{{ ssl_content.privkey | vault(vault_pass, vault_id=ssl_vault_id) }}"
+              passphrase: "{{ ssl_content.passphrase | vault(vault_pass, vault_id=ssl_vault_id) }}"
+        validate_certs: false
+        status_code: 200
+      when:
+        - netbox_record is not none
+        - key_result is defined
+
+    # --- Generate CSR ---
+
+    - name: Generate CSR
+      community.crypto.openssl_csr_pipe:
+        privatekey_content:    "{{ ssl_content.privkey }}"
+        privatekey_passphrase: "{{ ssl_content.passphrase }}"
+        common_name: "{{ reference | default(common_name) }}"
+        subject:
+          C:  "{{ countryName | default(ssl_request.countryName) }}"
+          ST: "{{ stateOrProvinceName | default(ssl_request.stateOrProvinceName) }}"
+          L:  "{{ localityName | default(ssl_request.localityName) }}"
+          O:  "{{ organizationName | default(ssl_request.organizationName) }}"
+          OU: "{{ owner_group | default(ssl_request.OrganizationalUnit) }}"
+        subject_alt_name: "{{ alt_names | default([]) | map('regex_replace', '^(.*)', 'DNS:\\1') | list }}"
+      register: csr_result
+
+    - name: Display CSR
+      ansible.builtin.debug:
+        msg: "{{ csr_result.csr }}"
+      tags: [print_action]

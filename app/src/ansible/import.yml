@@ -1,0 +1,142 @@
+---
+# import.yml - SSL certificate import for wanportal.
+#
+# Stores a signed certificate on the netbox-dns record that build.yml created
+# for common_name. Reads the PEM from the file passed as cert_file, checks the
+# certificate CN against common_name and its public key against the stored
+# private key (custom field ssl_privkey, a JSON object with privkey and
+# passphrase, ansible-vault encrypted under vault id netops), then writes the
+# certificate into the ssl_certificate custom field along with ssl_expiry,
+# ssl_sans and ssl_issuer.
+#
+# Needs: python packages ansible and fqdn (see requirements.txt), env vars
+# VAULT_PASS, NETBOX_TOKEN and NETBOX_URL. Collections: community.general
+# (fqdn_valid test) and community.crypto (x509_certificate_info,
+# openssl_privatekey_info), both bundled with the ansible package.
+#
+# NetBox API paths (netbox-dns plugin):
+#   GET    /api/plugins/netbox-dns/records/?fqdn=<name>.
+#   PATCH  /api/plugins/netbox-dns/records/<record id>/
+#
+# Usage: ansible-playbook import.yml -e "common_name=app.example.com" -e "cert_file=/path/to/signed.pem"
+
+- name: "SSL Certificate Import"
+  hosts: localhost
+  gather_facts: false
+
+  vars:
+    vault_pass:   "{{ lookup('env', 'VAULT_PASS') }}"
+    netbox_token: "{{ lookup('env', 'NETBOX_TOKEN') }}"
+    netbox_url:   "{{ lookup('env', 'NETBOX_URL') }}"
+
+  tasks:
+
+    - name: Assert that common_name is a valid FQDN
+      ansible.builtin.assert:
+        that: common_name is community.general.fqdn_valid
+        fail_msg: "{{ common_name }} is not a valid FQDN"
+        quiet: true
+
+    # --- Fetch existing DNS record from NetBox ---
+
+    - name: Fetch DNS record from NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/plugins/netbox-dns/records/?fqdn={{ common_name | lower }}."
+        method: GET
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Accept: "application/json"
+        validate_certs: false
+      register: netbox_record_lookup
+
+    - name: Set existing record fact
+      ansible.builtin.set_fact:
+        netbox_record: "{{ netbox_record_lookup.json.results[0] | default(None) }}"
+
+    - name: Assert DNS record exists in NetBox
+      ansible.builtin.assert:
+        that: netbox_record is not none
+        fail_msg: "No DNS record found for {{ common_name }} in NetBox"
+        quiet: true
+
+    - name: Assert ssl_privkey exists in NetBox record
+      ansible.builtin.assert:
+        that:
+          - netbox_record.custom_fields.ssl_privkey is defined
+          - netbox_record.custom_fields.ssl_privkey.privkey | default('') | length > 0
+        fail_msg: "No private key found in NetBox for {{ common_name }}"
+        quiet: true
+
+    # --- Decrypt private key from NetBox ---
+
+    - name: Decrypt ssl_privkey from NetBox
+      ansible.builtin.set_fact:
+        ssl_content:
+          privkey:    "{{ netbox_record.custom_fields.ssl_privkey.privkey | unvault(vault_pass) }}"
+          passphrase: "{{ netbox_record.custom_fields.ssl_privkey.passphrase | unvault(vault_pass) }}"
+
+    - name: Read certificate from file
+      ansible.builtin.set_fact:
+        certificate: "{{ lookup('ansible.builtin.file', cert_file) }}"
+
+    - name: Extract certificate info
+      community.crypto.x509_certificate_info:
+        content: "{{ certificate }}"
+      register: cert_info
+
+    # --- Validate certificate ---
+
+    - name: Extract certificate info
+      community.crypto.x509_certificate_info:
+        content: "{{ certificate }}"
+      register: cert_info
+
+    - name: Assert certificate CN matches common_name
+      ansible.builtin.assert:
+        that: cert_info.subject.commonName | lower == common_name | lower
+        fail_msg: "Certificate CN '{{ cert_info.subject.commonName }}' does not match common_name '{{ common_name }}'"
+        quiet: true
+
+    - name: Get private key info
+      community.crypto.openssl_privatekey_info:
+        content: "{{ ssl_content.privkey }}"
+        passphrase: "{{ ssl_content.passphrase }}"
+      register: key_info
+
+    - name: Assert certificate modulus matches private key
+      ansible.builtin.assert:
+        that: cert_info.public_key == key_info.public_key
+        fail_msg: "Certificate public key does not match private key"
+        quiet: true
+
+    - name: Extract expiry, SANs and issuer from certificate
+      ansible.builtin.set_fact:
+        ssl_expiry: "{{ cert_info.not_after | regex_replace('(\\d{4})(\\d{2})(\\d{2}).*', '\\1-\\2-\\3') }}"
+        ssl_sans:  "{{ cert_info.subject_alt_name | default([]) | map('regex_replace', '^DNS:', '') | join(', ') }}"
+        ssl_issuer: "{{ cert_info.issuer.commonName | default('') }}"
+
+    # --- Update NetBox with signed certificate ---
+
+    - name: Update ssl_certificate in NetBox
+      ansible.builtin.uri:
+        url: "{{ netbox_url }}/api/plugins/netbox-dns/records/{{ netbox_record.id }}/"
+        method: PATCH
+        headers:
+          Authorization: "Token {{ netbox_token }}"
+          Content-Type: "application/json"
+          Accept: "application/json"
+        body_format: json
+        body:
+          custom_fields:
+            ssl_certificate: "{{ certificate }}"
+            ssl_expiry:      "{{ ssl_expiry | default(omit) }}"
+            ssl_sans:        "{{ ssl_sans | default(omit) }}"
+            ssl_issuer:      "{{ ssl_issuer | default(omit) }}"
+        validate_certs: false
+        status_code: 200
+      register: netbox_update
+
+    - name: Display import result
+      ansible.builtin.debug:
+        msg: "Certificate for {{ common_name }} successfully imported into NetBox"
+      tags: [print_action]

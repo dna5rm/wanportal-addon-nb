@@ -1,0 +1,52 @@
+<?php
+/**
+ * config.php - Application configuration
+ *
+ * Copy this file to config.php (it lives next to index.php and is required
+ * by every entry point). Secrets are read from environment variables, so in
+ * a container you normally set the env vars and leave config.php as is.
+ *
+ * Auth model: there is no app-level secret. API callers authenticate with
+ * the Bearer token in the Authorization header, and that token IS a NetBox
+ * API token - it is validated live against NetBox and then reused for all
+ * NetBox reads/writes and passed to the Ansible wrappers as NETBOX_TOKEN.
+ */
+
+// Base URL of the NetBox instance (netbox-dns plugin required).
+define('NETBOX_URL',  getenv('NETBOX_URL')  ?: 'https://netbox.example.com');
+
+// Ansible Vault password - injected via container environment variable.
+// Used to encrypt/decrypt the private keys stored in NetBox custom fields.
+define('VAULT_PASS',  getenv('VAULT_PASS')  ?: '');
+
+// Certificate subject (CSR). Single source of truth for the subject details:
+// run_script() exports these to the Ansible wrappers and the playbooks read
+// them back with lookup('env', ...). Set the environment variables to change
+// them; no other place in the tree hardcodes subject values.
+define('SSL_CSR_COUNTRY',  getenv('SSL_CSR_COUNTRY')  ?: 'US');
+define('SSL_CSR_STATE',    getenv('SSL_CSR_STATE')    ?: 'California');
+define('SSL_CSR_LOCALITY', getenv('SSL_CSR_LOCALITY') ?: 'Example City');
+define('SSL_CSR_ORG',      getenv('SSL_CSR_ORG')      ?: 'Example Org');
+define('SSL_CSR_OU',       getenv('SSL_CSR_OU')       ?: 'IT');
+
+// Certificate key size (bits) and ansible-vault id used for the private keys.
+define('SSL_KEY_SIZE',  getenv('SSL_KEY_SIZE')  ?: '4096');
+define('SSL_VAULT_ID',  getenv('SSL_VAULT_ID')  ?: 'netops');
+
+// Paths.
+// ANSIBLE_PATH is relative to the app root (the directory holding index.php)
+// unless it starts with '/'. It points at src/ansible, where the playbooks
+// and the wrapper scripts live. The wrapper scripts (*.sh) must be
+// executable (755) - run_script() refuses to run anything that is not.
+define('ANSIBLE_PATH', 'src/ansible');
+
+// Optional path to a Python virtualenv containing Ansible. When set, its
+// bin/ directory is prepended to PATH for the wrapper scripts.
+define('VENV_PATH', getenv('VENV_PATH') ?: '');
+
+// Script timeout budget in seconds. Defined here for deployments that want
+// to enforce it (the PHP wrapper currently streams script output to
+// completion and does not kill long-running builds on its own).
+define('SCRIPT_TIMEOUT', 300);
+
+?>

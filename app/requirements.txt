@@ -1,0 +1,10 @@
+# Python packages for the SSL certificate playbooks in src/ansible.
+#
+#   ansible     ansible-playbook, the ansible-vault CLI and the bundled
+#               community.general and community.crypto collections
+#   dnspython   used by the community.general.dig lookup in build.yml
+#   fqdn        used by the community.general.fqdn_valid test in all playbooks
+
+ansible
+dnspython
+fqdn

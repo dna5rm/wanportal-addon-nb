@@ -1,0 +1,26 @@
+# Framework example with public-safe placeholders. Copy to the addon host and adjust.
+# Secrets are supplied via .env (never committed). Nothing listens on host ports;
+# the portal reverse proxy reaches this service over the shared docker network.
+
+services:
+  wanportal-addon-nb:
+    build: .
+    image: wanportal-addon-nb:latest
+    container_name: wanportal-addon-nb
+    restart: unless-stopped
+    env_file: .env
+    expose:
+      - "80"
+    # Optional: live-edit the addon tree from the host. The entrypoint writes
+    # config.php into this directory at start, so the mount must be writable.
+    # volumes:
+    #   - ./app:/var/www/localhost/htdocs/nb
+    # Attach to the portal compose network. "netops" is a placeholder; replace
+    # it with the actual portal network name (must already exist / be external).
+    # networks:
+    #   - netops
+
+# networks:
+#   netops:
+#     external: true
+#     name: netops

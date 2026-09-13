@@ -1,0 +1,15 @@
+<?php
+/**
+ * config.php
+ * Configuration for API
+ */
+
+return [
+    'api' => [
+        'url'   => 'https://netbox.example.com/api',
+        'token' => 'REPLACE_WITH_NETBOX_TOKEN'
+    ],
+    'bearer_token' => 'REPLACE_WITH_BEARER_TOKEN',
+    'debug'        => true,
+    'require_auth' => true
+];
