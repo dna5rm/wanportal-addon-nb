@@ -187,9 +187,7 @@ JS;
      * tags), then </body></html>.
      */
     function nb_chrome_foot(string $extraHtml = ''): void {
-        echo "<footer class=\"nb-foot\">wanportal &middot; NetBox sidecar &middot; ";
-        echo "<a href=\"/nb/reports/sites.php\">Sites</a> &middot; ";
-        echo "<a href=\"/nb/\">Certs</a></footer>\n";
+        echo "<footer class=\"nb-foot\">wanportal &middot; NetBox sidecar &middot;</footer>\n";
         if ($extraHtml !== '') {
             echo $extraHtml, "\n";
         }
@@ -316,8 +314,6 @@ a:hover { text-decoration: none; }
     color: var(--muted);
     font-size: 12px;
 }
-.nb-foot a { color: var(--muted); }
-.nb-foot a:hover { color: var(--text); }
 
 /* --- Bootstrap surface overrides (token-driven, theme-aware) --- */
 h1, h2, h3, h4, h5, h6 { color: var(--text); }

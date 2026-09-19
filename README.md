@@ -111,7 +111,7 @@ without a SPA rebuild.
 
 1. Put a page under `app/` so it is served at `/nb/...` (for example
    `app/reports/foo.php` at `/nb/reports/foo.php`).
-2. Link it in `app/src/chrome.php` (topnav and the footer). Those links are
+2. Link it in `app/src/chrome.php` (topnav). Those links are
    hardcoded there, not read from a config file.
 3. Optional: in wanportal `htdocs/config.json`, add a menu item with
    `"href": "/nb/reports/foo.php"`. Same-origin hrefs open in this tab. That
