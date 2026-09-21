@@ -77,32 +77,38 @@ hardcode no subject values.
 
 ## Attach to the portal
 
-1. Join the portal compose network. `netops` is a placeholder; use the real
-   external network name:
+Define the service in the portal `docker-compose.override.yml` (same
+`netops` network, `expose: ["80"]`, no host `ports`). Build and start
+from the portal directory, not this tree:
 
-   ```yaml
-   networks:
-     netops:
-       external: true
-       name: netops
-   ```
+```sh
+cd /path/to/wanportal
+docker compose up --build -d wanportal-addon-nb
+docker exec wanportal /usr/sbin/httpd -k graceful
+```
 
-2. Fill in `.env` and run `docker compose up -d --build`. The service listens
-   on port 80 inside the docker network only. Do not add a `ports:` mapping;
-   the portal proxy is the only entry point.
+`NETBOX_URL` must be reachable from the sidecar container, not
+`localhost`.
 
-3. On the wanportal proxy, route to the container by service name:
+On the wanportal proxy, scope the prefix header and pair ProxyPass:
 
-   ```apache
-   ProxyPass        /nb/             http://wanportal-addon-nb/nb/
-   ProxyPassReverse /nb/             http://wanportal-addon-nb/nb/
-   ```
+```apache
+<Location /nb/>
+    RequestHeader set X-Forwarded-Prefix "/nb"
+</Location>
+ProxyPass        /nb/ http://wanportal-addon-nb:80/nb/
+ProxyPassReverse /nb/ http://wanportal-addon-nb:80/nb/
+```
 
-   Keep the trailing slashes. `/nb/...` then maps 1:1 onto the container
-   paths, including the cloud-api at `/nb/cloud-api/`.
+Keep the trailing slashes. `/nb/...` maps 1:1 onto the container,
+including `/nb/cloud-api/`.
 
-4. Health check for the proxy or load balancer: `GET /health` returns HTTP 200
-   with `{"status":"ok"}`.
+Health: `GET /health` on the sidecar (not through the portal prefix)
+returns HTTP 200 with `{"status":"ok"}`.
+
+A 500 / AH00898 on `/nb/` means Apache cannot resolve
+`wanportal-addon-nb` (wrong network or compose run from this directory).
+AH00035 is host directory execute bits on the portal bind-mount.
 
 ## Adding pages without touching the SPA
 
