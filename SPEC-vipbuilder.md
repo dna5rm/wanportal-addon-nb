@@ -201,14 +201,24 @@ token). No session cookie. No GUI-only path.
 One file, `app/api/vip.php`. Dispatch on method plus `action`.
 
 - `GET ?action=fqdn&fqdn=<name>` — DNS lookup only. `200` unique, `404`
-  missing, `409` ambiguous (`count`).
+  missing, `409` ambiguous (`count`). The `200` body adds `address` (bare)
+  and `address_id` from the record's `vip_address` link — `''`/`null` when
+  the link is unset or unresolvable, and still `200` when the record exists
+  with no link. The page loads the VIP through the address path when that
+  address is present and the VIP address field is empty or already that
+  address; a focused field holding a different address is never clobbered.
 - `GET ?action=address&address=<ip>` — IP lookup only. Same three statuses.
   Include `vip_build` (compact line or empty), `vip_fqdn` (hostname derived
   from the `vip_ssl` link; empty when unset), and the IP's role and status
   when the IP exists.
 - `GET ?action=load&fqdn=<name>` — resolve the unique DNS name, then the
-  linked IP. `200` with `fqdn`, `address`, `id`, `dns_id`, and `vip_build`.
-  `404` if either side is missing. `409` if either side is ambiguous.
+  linked IP. The record's `vip_address` link wins: that IPAM object is
+  loaded by id and a failed load is an error (`404` when the linked IP is
+  gone, `500` otherwise), never a silent fallback to the DNS value. The
+  A/AAAA value is the fallback only when the link is unset, so records
+  saved before the link existed still load. `200` with `fqdn`, `address`,
+  `id`, `dns_id`, and `vip_build`. `404` if either side is missing. `409`
+  if either side is ambiguous.
 - `GET ?action=list` — IP addresses whose `vip_build` custom field is
   non-empty. `200` `{"vips":[{"id","address","fqdn","vip_build"}]}`. No
   secrets. This is how an automation finds what already exists. The page does

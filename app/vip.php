@@ -12,7 +12,10 @@
  * object link) and vip_address on the DNS record (the IP object link);
  * without a name, vip_ssl is stored null and the DNS record is not
  * touched. The address lookup's vip_fqdn response field (the hostname
- * behind the vip_ssl link) prefills an empty SSL Common Name field. The
+ * behind the vip_ssl link) prefills an empty SSL Common Name field, and
+ * the FQDN lookup's address response field (the bare address behind the
+ * record's vip_address link) prefills an empty VIP address field and
+ * loads the stored build through the address path. The
  * browser never talks to NetBox directly, never calls Tower, and never
  * stores the token server-side.
  *
@@ -745,7 +748,28 @@ nb_chrome_topnav('vips');
             fqdnState = 'checking'; paintFqdn();
             apiCall('GET', 'action=fqdn&fqdn=' + encodeURIComponent(v)).then(function (r) {
                 if (norm(fqdnInput.value) !== v) return; // stale response
-                if (r.status === 200) { fqdnState = 'found'; fqdnCount = 1; }
+                if (r.status === 200) {
+                    fqdnState = 'found'; fqdnCount = 1;
+                    // The record's vip_address link names the VIP: hand the
+                    // bare address to the existing address path (role/status
+                    // gate + fillFromStored) when the address field is empty
+                    // or already that address. A focused field holding a
+                    // different address is the operator typing - never
+                    // clobbered, and the name still reads found. No loop:
+                    // checkAddress backfills this name field only while it
+                    // is empty, and it is not.
+                    var linked = trim((r.body && r.body.address) || '');
+                    if (linked && isIp(linked)) {
+                        var current = trim(addrInput.value);
+                        if (current === '' || current === linked) {
+                            addrInput.value = linked;
+                            lastAddr = null; // checkAddress must not no-op
+                            paintFqdn(); refreshUI();
+                            checkAddress();
+                            return;
+                        }
+                    }
+                }
                 else if (r.status === 404) { fqdnState = 'missing'; fqdnCount = 0; }
                 else if (r.status === 409) { fqdnState = 'ambiguous'; fqdnCount = (r.body && r.body.count) || '>1'; }
                 else { fqdnState = 'error'; fqdnCount = 0; }

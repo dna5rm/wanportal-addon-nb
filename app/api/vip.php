@@ -14,7 +14,11 @@
  *
  * GET actions:
  *   action=fqdn&fqdn=<name>       DNS lookup only. 200 unique, 404
- *                                 missing, 409 ambiguous (+count).
+ *                                 missing, 409 ambiguous (+count). The
+ *                                 200 body adds address (bare) and
+ *                                 address_id from the record's
+ *                                 vip_address link - '' / null when the
+ *                                 link is unset or its IP GET failed.
  *   action=address&address=<ip>   IP lookup only. Same three statuses;
  *                                 when the IP exists the response carries
  *                                 vip_build (the stored build as one
@@ -28,8 +32,12 @@
  *                                 page can explain why the box stays
  *                                 unchecked.
  *   action=load&fqdn=<name>       Resolve the unique DNS name, then the
- *                                 linked IP. 200 with fqdn, address, id,
- *                                 dns_id, vip_build (same compact line).
+ *                                 linked IP: the record's vip_address
+ *                                 link when set (that IPAM object loaded
+ *                                 by id - a failed load is an error, not
+ *                                 a fallback), else the A/AAAA value.
+ *                                 200 with fqdn, address, id, dns_id,
+ *                                 vip_build (same compact line).
  *                                 404 if either side
  *                                 is missing, 409 if either is ambiguous.
  *   action=list                   IP addresses whose vip_build custom
@@ -401,6 +409,83 @@ function vip_ssl_hostname($raw, $token, $allow_lookup = true) {
     }
 
     return vip_record_hostname($response['data'] ?? null);
+}
+
+/**
+ * The IP address linked on a netbox-dns record's vip_address custom
+ * field. vip_address is an object-type custom field pointing at
+ * ipam.ipaddress: writers PATCH the integer id, readers get a bare id or
+ * a nested object carrying id plus the address/display fields. Returns:
+ *
+ *   ['state' => 'unset']                          - the field has no link
+ *   ['state' => 'ok', 'id' => int,
+ *    'address' => bare address string,
+ *    'ip' => fetched object or null]              - resolved link ('ip'
+ *                                                 is set only when this
+ *                                                 helper did the GET)
+ *   ['state' => 'error', 'http_code' => int,
+ *    'error' => string]                           - the id-only GET failed
+ *
+ * The bare address prefers the address/display the nested object already
+ * carries (vip_normalize_address strips the mask); an id-only link is
+ * resolved with one GET of the linked ipam object, which the caller may
+ * reuse. action=fqdn treats 'error' as unset - a found DNS record must
+ * never turn into a 500 - while action=load treats it as a hard error: a
+ * set link loads its own IP and never falls back to the A record value.
+ */
+function vip_record_vip($record, $token) {
+    $custom_fields = is_array($record['custom_fields'] ?? null)
+        ? $record['custom_fields']
+        : [];
+    $raw = $custom_fields['vip_address'] ?? null;
+
+    if ($raw === null || $raw === '') {
+        return ['state' => 'unset'];
+    }
+
+    $id = vip_object_id($raw);
+
+    if ($id === null) {
+        return ['state' => 'unset'];
+    }
+
+    $address = '';
+
+    if (is_array($raw)) {
+        foreach (['address', 'display'] as $key) {
+            $value = $raw[$key] ?? null;
+
+            if (is_string($value) && trim($value) !== '') {
+                $address = vip_normalize_address($value);
+                break;
+            }
+        }
+    }
+
+    $ip = null;
+
+    if ($address === '') {
+        // Only an id is present: recover the bare address from IPAM.
+        $response = netbox_request(
+            'GET',
+            '/api/ipam/ip-addresses/' . $id . '/',
+            $token
+        );
+
+        if ($response['http_code'] !== 200) {
+            return [
+                'state'     => 'error',
+                'http_code' => $response['http_code'],
+                'error'     => 'Linked VIP address lookup failed (HTTP '
+                    . $response['http_code'] . ')',
+            ];
+        }
+
+        $ip      = is_array($response['data'] ?? null) ? $response['data'] : [];
+        $address = vip_normalize_address((string)($ip['address'] ?? ''));
+    }
+
+    return ['state' => 'ok', 'id' => $id, 'address' => $address, 'ip' => $ip];
 }
 
 /**
@@ -898,14 +983,22 @@ switch ($action) {
 
         $record = $lookup['records'][0];
 
+        // The record's vip_address link names the VIP the page loads
+        // through the address path. Unset or unresolvable is '' / null:
+        // a found DNS record never turns into a 500 because its link is
+        // broken, and the page keeps the "found" state without loading.
+        $vip = vip_record_vip($record, $token);
+
         json_response([
-            'fqdn'   => $fqdn,
-            'id'     => $record['id'],
-            'dns_id' => $record['id'],
-            'name'   => (string)($record['name'] ?? ''),
-            'zone'   => (string)($record['zone']['name'] ?? ''),
-            'type'   => (string)($record['type'] ?? ''),
-            'value'  => (string)($record['value'] ?? ''),
+            'fqdn'       => $fqdn,
+            'id'         => $record['id'],
+            'dns_id'     => $record['id'],
+            'name'       => (string)($record['name'] ?? ''),
+            'zone'       => (string)($record['zone']['name'] ?? ''),
+            'type'       => (string)($record['type'] ?? ''),
+            'value'      => (string)($record['value'] ?? ''),
+            'address'    => $vip['state'] === 'ok' ? $vip['address'] : '',
+            'address_id' => $vip['state'] === 'ok' ? $vip['id'] : null,
         ]);
         break;
 
@@ -957,26 +1050,70 @@ switch ($action) {
             vip_lookup_fail($dns, 'FQDN', $fqdn);
         }
 
-        $record       = $dns['records'][0];
-        $record_value = trim((string)($record['value'] ?? ''));
+        $record = $dns['records'][0];
 
-        if ($record_value === '') {
-            json_response(['error' => 'DNS record has no value: ' . $fqdn], 404);
+        // The vip_address link wins when it is set: load THAT ipam object
+        // by id - a second address= search can 409, and a set link must
+        // never silently fall back to the A record value. The DNS value
+        // stays the fallback so records saved before the link existed
+        // still load.
+        $vip = vip_record_vip($record, $token);
+
+        if ($vip['state'] === 'error') {
+            json_response(
+                ['error' => $vip['error'] . ': ' . $fqdn],
+                $vip['http_code'] === 404 ? 404 : 500
+            );
         }
 
-        $ip_lookup = vip_ip_lookup(vip_normalize_address($record_value), $token);
+        $fallback_address = '';
 
-        if ($ip_lookup['state'] !== 'ok') {
-            vip_lookup_fail($ip_lookup, 'IP address', $record_value);
+        if ($vip['state'] === 'ok') {
+            // The helper already fetched the IP object when the link
+            // carried only an id; otherwise one id-GET recovers it.
+            $ip               = is_array($vip['ip'] ?? null) ? $vip['ip'] : null;
+            $fallback_address = $vip['address'];
+
+            if (!is_array($ip)) {
+                $response = netbox_request(
+                    'GET',
+                    '/api/ipam/ip-addresses/' . $vip['id'] . '/',
+                    $token
+                );
+
+                if ($response['http_code'] !== 200) {
+                    json_response(
+                        ['error' => 'Linked VIP address lookup failed (HTTP '
+                            . $response['http_code'] . '): ' . $fqdn],
+                        $response['http_code'] === 404 ? 404 : 500
+                    );
+                }
+
+                $ip = is_array($response['data'] ?? null) ? $response['data'] : [];
+            }
+        } else {
+            $record_value     = trim((string)($record['value'] ?? ''));
+            $fallback_address = $record_value;
+
+            if ($record_value === '') {
+                json_response(['error' => 'DNS record has no value: ' . $fqdn], 404);
+            }
+
+            $ip_lookup = vip_ip_lookup(vip_normalize_address($record_value), $token);
+
+            if ($ip_lookup['state'] !== 'ok') {
+                vip_lookup_fail($ip_lookup, 'IP address', $record_value);
+            }
+
+            $ip = $ip_lookup['records'][0];
         }
 
-        $ip            = $ip_lookup['records'][0];
         $custom_fields = is_array($ip['custom_fields'] ?? null) ? $ip['custom_fields'] : [];
         $stored        = vip_build_stored($custom_fields);
 
         json_response([
             'fqdn'      => $fqdn,
-            'address'   => (string)($ip['address'] ?? $record_value),
+            'address'   => (string)($ip['address'] ?? $fallback_address),
             'id'        => $ip['id'],
             'dns_id'    => $record['id'],
             'vip_build' => vip_build_compact($stored) ?? '',

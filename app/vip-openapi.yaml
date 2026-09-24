@@ -32,7 +32,9 @@ paths:
       description: >
         Dispatch is the action query parameter. action=build returns the
         stored {"build":...} object itself, compact, with no wrapper.
-        That is the document the playbook fetches.
+        That is the document the playbook fetches. action=fqdn responses
+        also carry address and address_id from the DNS record's
+        vip_address link (the address lookup omits address_id).
       operationId: vipGet
       parameters:
         - name: action
@@ -230,6 +232,13 @@ components:
       properties:
         address:
           type: string
+        address_id:
+          type: integer
+          nullable: true
+          description: >
+            The IP id behind the DNS record's vip_address link, on
+            action=fqdn responses; null or absent when the link is unset
+            (address responses carry no address_id).
         id:
           type: integer
         vip_build:
