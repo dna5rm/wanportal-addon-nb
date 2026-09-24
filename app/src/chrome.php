@@ -25,7 +25,7 @@
  *     green underlined link), .bar / .bar-title h1 header from base.css,
  *     no underline on any anchor
  *   - all navigation links same-tab (no target="_blank"), hrefs:
- *     /  /#/  /#/latency  /#/api  /nb/  /nb/reports/sites.php
+ *     /  /nb/  /nb/vip.php  /nb/reports/sites.php
  *   - embed mode (?embed or X-Wanportal-Embed header): topnav prints nothing
  *     (the SPA owns the bar), body gets padding-top 0; head tokens unchanged
  */
@@ -163,13 +163,10 @@ JS;
             return;
         }
         $links = [
-            'home'    => ['/',                      'Home'],
-            'portal'  => ['/#/',                    'Portal'],
-            'latency' => ['/#/latency',             'Latency'],
-            'api'     => ['/#/api',                 'API'],
-            'certs'   => ['/nb/',                   'CertMgr'],
-            'vips'    => ['/nb/vip.php',            'VIP Builder'],
-            'sites'   => ['/nb/reports/sites.php',  'Sites'],
+            'dashboard' => ['/',                     'Dashboard'],
+            'certs'     => ['/nb/',                  'CertMgr'],
+            'vips'      => ['/nb/vip.php',           'VIP Builder'],
+            'sites'     => ['/nb/reports/sites.php', 'Sites'],
         ];
 
         echo "<nav class=\"topnav\">\n";
