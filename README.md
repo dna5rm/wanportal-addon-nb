@@ -8,7 +8,7 @@ never publishes a host port.
 
 | Path in container | Serves |
 | --- | --- |
-| `/var/www/localhost/htdocs/nb` | addon tree at `/nb/` (`RewriteBase /nb/`): certificate console, sites report, cloud-api |
+| `/var/www/localhost/htdocs/nb` | addon tree at `/nb/` (`RewriteBase /nb/`): certificate console, VIP builder, sites report, cloud-api |
 | `/var/www/localhost/htdocs/health.php` | `GET /health` probe |
 | `/opt/ansible-venv` | Python venv: ansible, ansible-vault, dnspython, fqdn |
 
@@ -30,6 +30,29 @@ The certificate console drives four flows against NetBox:
 A sites report under `/nb/reports/sites.php` lists NetBox sites. The cloud-api
 is a small IP reservation API for callers outside the portal.
 
+## VIP builder
+
+`/nb/vip.php` is a second tool in the same tree. It builds an F5 VIP as one
+JSON build document, shows it as a diagram, and stores it on an existing
+NetBox IP address. The playbook reads the stored build back through the API.
+
+Three NetBox custom fields hold the state, all under the group name VIP:
+
+| Custom field | On | Content |
+| --- | --- | --- |
+| `vip_build` | IP address | JSON object, `{"build":...}` |
+| `vip_ssl` | IP address | object link to its netbox-dns record; null when the build has no SSL Common Name |
+| `vip_address` | DNS record | object link back to the IP address |
+
+There is no `vip_fqdn` custom field. API responses derive the hostname string
+from the `vip_ssl` link.
+
+The API spec is `app/vip-openapi.yaml`, browsable at `/nb/vip-swagger`. The
+page and its API are specified in `SPEC-vipbuilder.md`. F5 profile names and
+limit choices come from `config.php` — the `VIP_*` constants and the
+same-named environment variables; the shipped defaults are the builtin
+`/Common` objects.
+
 ## Environment
 
 Configuration comes from the environment. At container start the entrypoint
@@ -45,6 +68,7 @@ warning and continues; mount your own `config.php` in that case.
 | `NETBOX_TOKEN` | NetBox API token. Used by the cloud-api config and the sites report. | yes |
 | `VAULT_PASS` | ansible-vault passphrase. Decrypts and encrypts the private key values stored in NetBox custom fields. Every certificate flow uses it. | yes |
 | `VENV_PATH` | venv location. Defaults to `/opt/ansible-venv`. | no |
+| `VIP_*` | Optional VIP builder overrides: F5 object names (`VIP_PROFILE_HTTP`, `VIP_PROFILE_TCP`, `VIP_MONITOR_TCP`, `VIP_MONITOR_PING`, `VIP_PERSIST_COOKIE`, `VIP_PERSIST_SOURCE`, `VIP_IRULE_HTTPS_REDIRECT`) and limit choices (`VIP_LIMIT_HOSTS`). See `app/config.php.example` and `SPEC-vipbuilder.md`. | no |
 | `CLOUD_API_BEARER_TOKEN` | Caller-facing bearer token for the cloud-api. | cloud-api auth |
 
 Secrets live in `.env` next to the compose file:
@@ -72,8 +96,8 @@ default `netops`), each read from the same-named environment variable.
 `run_script()` exports them to the Ansible wrappers and the playbooks read
 them back with `lookup('env', ...)`, so setting the environment variables -
 e.g. in `.env` next to the compose file - changes every certificate build.
-Defaults: `US`, empty state and locality, `Example Org`, `IT`. The playbooks
-hardcode no subject values.
+Defaults: `US`, `California`, `Example City`, `Example Org`, `IT`. The
+playbooks hardcode no subject values.
 
 ## Attach to the portal
 
@@ -151,7 +175,7 @@ build flow creates one (type `A`) in the matching zone.
 Bearer tokens are NetBox tokens. Callers of the `/nb/` API send:
 
 ```
-Authorization: Bearer your-netbox-api-token
+Authorization: Bearer <netbox-api-token>
 ```
 
 The sidecar validates the token against NetBox, then passes the same token to

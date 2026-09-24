@@ -65,16 +65,21 @@ not resolve yet (correct it in NetBox afterwards).
 ├── config.php.example           # Configuration template — copy to config.php
 ├── openapi.yaml                 # OpenAPI 3.0 spec for the API
 ├── swagger.html                 # Swagger UI for the spec
+├── vip.php                      # VIP builder page (see SPEC-vipbuilder.md)
+├── vip-openapi.yaml             # OpenAPI 3.0 spec for the VIP builder API
+├── vip-swagger.html             # Swagger UI for vip-openapi.yaml
 ├── requirements.txt             # Python deps for the Ansible playbooks
 ├── api/
 │   ├── build.php                # POST /api/build    — new private key + CSR
 │   ├── show.php                 # POST /api/show     — retrieve stored cert
 │   ├── import.php               # POST /api/import   — store a CA-signed cert
-│   └── selfsign.php             # POST /api/selfsign — mint a self-signed cert
+│   ├── selfsign.php             # POST /api/selfsign — mint a self-signed cert
+│   └── vip.php                  # /api/vip.php       — VIP builder: lookups, validate, save
 └── src/
     ├── auth.php                 # Bearer token auth (the token is a NetBox token)
     ├── utils.php                # Shared plumbing: content negotiation, run_script()
     ├── chrome.php               # Shared page chrome for the sidecar web pages
+    ├── vip_profiles.php         # Site-overridable F5 object names for the VIP builder
     ├── ansible/
     │   ├── build.yml            # Playbook: generate/reuse private key, create DNS record, CSR
     │   ├── import.yml           # Playbook: validate signed cert against the key, store it
@@ -88,9 +93,10 @@ not resolve yet (correct it in NetBox afterwards).
         └── helpers.php          # Zones, DNS record lookup/create/update/upsert, token check
 ```
 
-The same tree also hosts two sibling apps behind the same mount point, each
-with its own entry point and `api/`/`src/`:
+The same tree also hosts three more entry points behind the same mount point:
 
+- `vip.php` + `api/vip.php` — the VIP builder page and its API (see
+  `SPEC-vipbuilder.md` at the repo root and `vip-openapi.yaml`)
 - `reports/` — a NetBox sites table page
 - `cloud-api/` — address reservation API (see `cloud-api/README.md`)
 
@@ -135,7 +141,7 @@ The CSR subject details live in one place only: `config.php`. It defines
 `SSL_CSR_OU` (plus optional `SSL_KEY_SIZE`, default 4096, and `SSL_VAULT_ID`,
 default `netops`), each read from the same-named environment variable.
 `run_script()` exports them to the wrappers and the playbooks read them back
-with `lookup('env', ...)`. Defaults: `US`, empty state and locality,
+with `lookup('env', ...)`. Defaults: `US`, `California`, `Example City`,
 `Example Org`, `IT`. The playbooks hardcode no subject values.
 
 ## Running

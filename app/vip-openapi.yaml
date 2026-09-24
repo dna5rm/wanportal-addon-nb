@@ -1,0 +1,330 @@
+openapi: "3.0.3"
+info:
+  title: VIP Builder
+  description: >
+    Build, load, validate, and store an F5 VIP build on an existing
+    NetBox IP address. The build is stored as the vip_build JSON object
+    custom field, holding {"build":...}. vip_ssl is an object custom
+    field on the IP pointing at its netbox-dns record, and vip_address
+    is an object custom field on the record pointing back at the IP.
+    There is no vip_fqdn custom field: responses derive the hostname
+    from the vip_ssl link. The Bearer token is a NetBox API token. It is
+    checked against NetBox and then used for the reads and writes.
+    Nothing here creates an IP address or a DNS record. The VIP address
+    must have role VIP and status Active; member addresses only need to
+    exist.
+  version: "1.0.0"
+  contact:
+    name: IT Operations - Network Engineering
+    email: networkengineering@example.com
+
+servers:
+  - url: /nb
+    description: This origin
+
+security:
+  - bearerAuth: []
+
+paths:
+  /api/vip.php:
+    get:
+      summary: Look up, load, list, or fetch a build
+      description: >
+        Dispatch is the action query parameter. action=build returns the
+        stored {"build":...} object itself, compact, with no wrapper.
+        That is the document the playbook fetches.
+      operationId: vipGet
+      parameters:
+        - name: action
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [fqdn, address, load, list, build]
+        - name: fqdn
+          in: query
+          required: false
+          schema:
+            type: string
+            example: app.example.com
+          description: Required for action=fqdn, load, and build-by-name.
+        - name: address
+          in: query
+          required: false
+          schema:
+            type: string
+            example: 192.0.2.10
+          description: Required for action=address and build-by-address. A bare address matches a stored /32.
+      responses:
+        "200":
+          description: Unique hit, list, or the raw build document
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/Lookup"
+                  - $ref: "#/components/schemas/LoadResult"
+                  - $ref: "#/components/schemas/VipList"
+                  - $ref: "#/components/schemas/BuildDocument"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+    post:
+      summary: Validate or save a build
+      description: >
+        Body is {"build":{...}}. A bare build object is also accepted.
+        validate writes nothing. save patches vip_build and vip_ssl on
+        the existing IP and vip_address on the existing DNS record.
+        With no SSL Common Name the listeners are named after the VIP
+        address, vip_ssl is stored null, and the DNS record is not
+        touched.
+      operationId: vipPost
+      parameters:
+        - name: action
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [validate, save]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BuildDocument"
+            example:
+              build:
+                limit:
+                  - lb-a.example.com
+                  - lb-b.example.com
+                ssl_key_cert:
+                  - name: app.example.com
+                virtual:
+                  - name: app.example.com
+                    address: 192.0.2.10
+                    port: 443
+                    ip_protocol: tcp
+                    source: 0.0.0.0/0
+                    snat: automap
+                    profiles:
+                      - /Common/http
+                      - /Common/tcp
+                      - name: /Common/app.example.com_clientssl
+                        context: client-side
+                    default_persistence_profile: /Common/cookie
+                    pool:
+                      name: app.example.com_8080_pool
+                      lb_method: least-connections-node
+                      monitors:
+                        - /Common/tcp
+                    nodes:
+                      - address: 192.0.2.20
+                        port: 8080
+      responses:
+        "200":
+          description: Checks passed. save also returns the stored ids.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SaveResult"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: NetBox API token used as Bearer token
+
+  schemas:
+    BuildDocument:
+      type: object
+      required: [build]
+      properties:
+        build:
+          type: object
+          required: [limit, virtual]
+          properties:
+            limit:
+              type: array
+              items:
+                type: string
+              description: Playbook limit hostnames. A configured pair is two entries, not one comma-joined string.
+            ssl_key_cert:
+              type: array
+              description: Present only when a listener terminates client SSL.
+              items:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    example: app.example.com
+            virtual:
+              type: array
+              items:
+                $ref: "#/components/schemas/Listener"
+    Listener:
+      type: object
+      required: [name, address, port]
+      properties:
+        name:
+          type: string
+          description: >-
+            Doubles as the SSL Common Name. May be the VIP address itself;
+            it must be a hostname in netbox-dns when any listener carries a
+            client SSL profile.
+        address:
+          type: string
+        port:
+          type: integer
+        ip_protocol:
+          type: string
+          example: tcp
+        source:
+          type: string
+          example: 0.0.0.0/0
+        snat:
+          type: string
+          example: automap
+        profiles:
+          type: array
+          items: {}
+          description: Always includes the configured tcp profile. HTTP listeners also include the configured HTTP profile. Client SSL is an object with name and context client-side.
+        irules:
+          type: array
+          items:
+            type: string
+          description: Only allowed on port 80, and only the configured HTTPS redirect iRule. That listener must also include the configured HTTP profile and must not carry a clientssl profile.
+        default_persistence_profile:
+          type: string
+          description: Configured cookie or source-address profile. Omitted when persistence is none. The cookie profile requires the HTTP profile on the same listener.
+        pool:
+          description: Pool object on the owner, or the pool name string on a sibling listener. Omitted when the listener has no pool.
+        nodes:
+          type: array
+          items:
+            type: object
+            properties:
+              address:
+                type: string
+              port:
+                type: integer
+    Lookup:
+      type: object
+      properties:
+        address:
+          type: string
+        id:
+          type: integer
+        vip_build:
+          type: string
+          description: The stored build as one compact JSON line, or empty.
+        vip_fqdn:
+          type: string
+          description: Hostname derived from the vip_ssl link; not a stored custom field. Empty when unset.
+    LoadResult:
+      type: object
+      properties:
+        fqdn:
+          type: string
+        address:
+          type: string
+        id:
+          type: integer
+        dns_id:
+          type: integer
+        vip_build:
+          type: string
+    VipList:
+      type: object
+      properties:
+        vips:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              address:
+                type: string
+              fqdn:
+                type: string
+              vip_build:
+                type: string
+    SaveResult:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        id:
+          type: integer
+        dns_id:
+          type: integer
+          description: Null when the build has no SSL Common Name; the DNS record is not touched.
+        vip_build:
+          type: string
+        error:
+          type: string
+
+  responses:
+    BadRequest:
+      description: Missing action, unknown action, or a build the checks rejected
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+    Unauthorized:
+      description: Missing or rejected NetBox token
+    NotFound:
+      description: FQDN, address, or stored build was not found
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+    Conflict:
+      description: More than one DNS record or IP address matched
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              count:
+                type: integer
+    MethodNotAllowed:
+      description: Wrong HTTP method for this action
+    InternalError:
+      description: A link write failed. ok is never true in this case.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+              failed:
+                type: string
+                enum: [ip_address, dns_record]

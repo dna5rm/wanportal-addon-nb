@@ -167,7 +167,8 @@ JS;
             'portal'  => ['/#/',                    'Portal'],
             'latency' => ['/#/latency',             'Latency'],
             'api'     => ['/#/api',                 'API'],
-            'certs'   => ['/nb/',                   'Certs'],
+            'certs'   => ['/nb/',                   'CertMgr'],
+            'vips'    => ['/nb/vip.php',            'VIP Builder'],
             'sites'   => ['/nb/reports/sites.php',  'Sites'],
         ];
 

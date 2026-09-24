@@ -44,6 +44,19 @@ define('VENV_PATH', getenv('VENV_PATH') ?: '/opt/ansible-venv');
 // Script execution timeout in seconds
 define('SCRIPT_TIMEOUT', 300);
 
+// VIP builder F5 object names. Builtin defaults; override via environment.
+define('VIP_PROFILE_HTTP',         getenv('VIP_PROFILE_HTTP')         ?: '/Common/http');
+define('VIP_PROFILE_TCP',          getenv('VIP_PROFILE_TCP')          ?: '/Common/tcp');
+define('VIP_MONITOR_TCP',          getenv('VIP_MONITOR_TCP')          ?: '/Common/tcp');
+define('VIP_MONITOR_PING',         getenv('VIP_MONITOR_PING')         ?: '/Common/gateway_icmp');
+define('VIP_PERSIST_COOKIE',       getenv('VIP_PERSIST_COOKIE')       ?: '/Common/cookie');
+define('VIP_PERSIST_SOURCE',       getenv('VIP_PERSIST_SOURCE')       ?: '/Common/source_addr');
+define('VIP_IRULE_HTTPS_REDIRECT', getenv('VIP_IRULE_HTTPS_REDIRECT') ?: '/Common/_sys_https_redirect');
+
+// Playbook limit choices. Empty keeps a free-text box. One option per line,
+// or several options separated by semicolons. A comma inside an option is a pair.
+define('VIP_LIMIT_HOSTS', getenv('VIP_LIMIT_HOSTS') ?: '');
+
 ?>
 PHPEOF
   then

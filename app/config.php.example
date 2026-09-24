@@ -49,4 +49,22 @@ define('VENV_PATH', getenv('VENV_PATH') ?: '');
 // completion and does not kill long-running builds on its own).
 define('SCRIPT_TIMEOUT', 300);
 
+// VIP builder F5 object names. Builtin defaults. Override a constant here,
+// or set the same-named environment variable, to point at a site profile.
+// Leave a value empty to keep the builtin name. Do not put site names in git.
+define('VIP_PROFILE_HTTP',         getenv('VIP_PROFILE_HTTP')         ?: '/Common/http');
+define('VIP_PROFILE_TCP',          getenv('VIP_PROFILE_TCP')          ?: '/Common/tcp');
+define('VIP_MONITOR_TCP',          getenv('VIP_MONITOR_TCP')          ?: '/Common/tcp');
+define('VIP_MONITOR_PING',         getenv('VIP_MONITOR_PING')         ?: '/Common/gateway_icmp');
+define('VIP_PERSIST_COOKIE',       getenv('VIP_PERSIST_COOKIE')       ?: '/Common/cookie');
+define('VIP_PERSIST_SOURCE',       getenv('VIP_PERSIST_SOURCE')       ?: '/Common/source_addr');
+define('VIP_IRULE_HTTPS_REDIRECT', getenv('VIP_IRULE_HTTPS_REDIRECT') ?: '/Common/_sys_https_redirect');
+
+// Limit choices for the VIP builder (the playbook limit hostnames).
+// Empty keeps a free-text box.
+// One option per line. A line is one host, or a comma-separated pair:
+//   lb-a.example.com, lb-b.example.com
+// Semicolons also separate options. Do not put site names in git.
+define('VIP_LIMIT_HOSTS', getenv('VIP_LIMIT_HOSTS') ?: '');
+
 ?>

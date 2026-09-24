@@ -86,6 +86,16 @@ switch ($uri) {
         readfile(__DIR__ . '/openapi.yaml');
         break;
 
+    case '/vip-swagger':
+        header('Content-Type: text/html');
+        readfile(__DIR__ . '/vip-swagger.html');
+        break;
+
+    case '/vip-openapi.yaml':
+        header('Content-Type: application/yaml');
+        readfile(__DIR__ . '/vip-openapi.yaml');
+        break;
+
     default:
         http_response_code(404);
         header('Content-Type: application/json');
