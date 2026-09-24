@@ -58,7 +58,7 @@ if (file_exists(__DIR__ . '/config.php')) {
 require_once __DIR__ . '/src/vip_profiles.php';
 
 // Configured Tower limit choices (VIP_LIMIT_HOSTS): an empty list keeps
-// the free-text textarea; a non-empty list renders the choice select.
+// the free-text textarea; a non-empty list renders the choice multi-select.
 // Hostnames live only in config.php / the environment, never here.
 $vipLimitOptions = vip_limit_options();
 
@@ -260,7 +260,7 @@ nb_chrome_topnav('vips');
         .check-line.err  { color: var(--danger); }
 
         /* Limit textarea (no configured choices): one hostname per line,
-         * nothing prefilled; the configured-choice select is plain
+         * nothing prefilled; the configured-choice multi-select is plain
          * .form-control, so the sizing rule stays textarea-only. */
         textarea#limit { resize: vertical; min-height: 54px; }
 
@@ -490,19 +490,21 @@ nb_chrome_topnav('vips');
             </div>
 
             <!-- Limit: required. With VIP_LIMIT_HOSTS configured the field
-                 is a select of the configured choices (option value = the
-                 host list, one host per line; a pair stores both hosts);
-                 without it, a textarea with one hostname per line. The
-                 hostnames themselves stay in config.php / the environment. -->
+                 is a multi-select of the configured choices (option value =
+                 the host list, one host per line; a pair stores both hosts;
+                 several choices may be selected at once and the stored list
+                 is the union of the selected options' hosts); without it, a
+                 textarea with one hostname per line. The hostnames
+                 themselves stay in config.php / the environment. -->
             <div class="form-group">
                 <label for="limit">Limit</label>
 <?php if ($vipLimitOptions): ?>
-                <select id="limit" class="form-control">
-                    <option value="">select a limit</option>
+                <select id="limit" multiple size="<?php echo min(4, count($vipLimitOptions)); ?>" class="form-control">
 <?php foreach ($vipLimitOptions as $vipLimitOption): ?>
                     <option value="<?php echo str_replace("\n", '&#10;', htmlspecialchars(implode("\n", $vipLimitOption['hosts']), ENT_QUOTES)); ?>"><?php echo htmlspecialchars($vipLimitOption['label'], ENT_QUOTES); ?></option>
 <?php endforeach; ?>
                 </select>
+                <div class="check-line">select one or more pairs.</div>
 <?php else: ?>
                 <textarea id="limit" class="form-control mono" rows="3" placeholder="one hostname per line"></textarea>
 <?php endif; ?>
@@ -612,32 +614,42 @@ nb_chrome_topnav('vips');
             return n;
         }
 
-        // ---------- limit field (textarea, or select of configured choices) ----------
+        // ---------- limit field (textarea, or multi-select of choices) ----------
         // The PHP page renders the free-text textarea when the deployment
-        // configures no VIP_LIMIT_HOSTS choices, else a <select id="limit">
-        // whose option values are the host lists (one host per line).
+        // configures no VIP_LIMIT_HOSTS choices, else a <select id="limit"
+        // multiple> whose option values are the host lists (one host per
+        // line). Several options can be selected at once.
         // readLimit()/writeLimit() are the only code that touches the field,
         // so both faces behave identically and build.limit stays an array
         // of hostname strings.
         var limitMode = limitEl && limitEl.tagName === 'SELECT' ? 'select' : 'textarea';
 
-        // Order-independent host-list equality (trimmed, case-insensitive).
-        function sameHosts(a, b) {
-            if (a.length !== b.length || !a.length) return false;
-            var low = function (s) { return s.toLowerCase(); };
-            return a.map(low).sort().join('|') === b.map(low).sort().join('|');
-        }
-
-        // The hostnames the limit field currently holds ([] when empty).
+        // The hostnames the limit field currently holds ([] when empty):
+        // textarea lines, or the union of the selected options' hosts in
+        // config order, de-duplicated (first occurrence wins).
         function readLimit() {
-            var raw = String(limitEl.value || '');
-            return raw.split('\n').map(trim).filter(function (s) { return s !== ''; });
+            if (limitMode !== 'select') {
+                var raw = String(limitEl.value || '');
+                return raw.split('\n').map(trim).filter(function (s) { return s !== ''; });
+            }
+            var seen = {}, out = [];
+            Array.prototype.forEach.call(limitEl.options, function (o) {
+                if (!o.selected) return;
+                o.value.split('\n').map(trim).filter(function (s) { return s !== ''; })
+                    .forEach(function (h) {
+                        var k = h.toLowerCase();
+                        if (!seen[k]) { seen[k] = true; out.push(h); }
+                    });
+            });
+            return out;
         }
 
-        // Fill the limit field from a host list: textarea text, or the
-        // configured option whose host list matches. No match leaves the
-        // blank option selected (an option is never invented) and queues
-        // the not-in-list warning for the next status message.
+        // Fill the limit field from a host list: textarea text, or — in the
+        // multi-select — every option whose hosts are ALL present in the
+        // list (an option with a missing host is not selected; an option is
+        // never invented). Hosts matching no option queue a short warning
+        // naming them for the next status message; the matched selections
+        // are not cleared.
         var limitWarnPending = null;
 
         function writeLimit(hosts) {
@@ -646,20 +658,18 @@ nb_chrome_topnav('vips');
                 limitEl.value = list.join('\n');
                 return;
             }
-            var matched = false;
+            var low = function (s) { return s.toLowerCase(); };
+            var have = {}, covered = {};
+            list.forEach(function (h) { have[low(h)] = true; });
             Array.prototype.forEach.call(limitEl.options, function (o) {
-                if (matched || !o.value) return;   // skip the blank option
                 var oHosts = o.value.split('\n').map(trim).filter(function (s) { return s !== ''; });
-                if (sameHosts(oHosts, list)) {
-                    o.selected = true;
-                    matched = true;
-                }
+                var all = oHosts.length > 0 && oHosts.every(function (h) { return have[low(h)]; });
+                o.selected = all;
+                if (all) oHosts.forEach(function (h) { covered[low(h)] = true; });
             });
-            if (!matched) {
-                limitEl.value = '';
-                if (list.length) {
-                    limitWarnPending = 'loaded limit (' + list.join(', ') + ') is not in the configured limit list';
-                }
+            var unmatched = list.filter(function (h) { return !covered[low(h)]; });
+            if (unmatched.length) {
+                limitWarnPending = 'loaded limit (' + unmatched.join(', ') + ') not covered by the configured limit choices';
             }
         }
 
@@ -1073,9 +1083,9 @@ nb_chrome_topnav('vips');
         function setMsg(text, kind) {
             var t = String(text || '');
             var k = kind || '';
-            // A loaded limit that is not among the configured choices was
-            // reported by writeLimit; carry it on the next status line so
-            // the operator actually sees it.
+            // Unmatched hosts from a loaded limit are reported by
+            // writeLimit; carry them on the next status line so the
+            // operator actually sees them.
             if (limitWarnPending) {
                 var w = limitWarnPending;
                 limitWarnPending = null;

@@ -150,7 +150,9 @@ Left, top to bottom:
    status stays unchecked and names the actual values. Save and validate
    reject that address. Member IPs are not required to be role VIP.
 3. Limit. Required. One hostname per line when VIP_LIMIT_HOSTS is empty. When
-   that config value is set, the page shows a select instead of a text box.
+   that config value is set, the page shows a multi-select instead of a text
+   box, and several choices may be selected at once (build.limit keeps the
+   union of the selected options' hosts).
    Each config line is one choice: a single host, or a comma-separated pair.
    Choosing a pair stores both hostnames in build.limit.
 4. Listeners. Add/remove rows. Each row: port, HTTP on/off, client SSL on/off
