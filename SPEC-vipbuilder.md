@@ -38,8 +38,9 @@ submits it. Submit stores the build on the existing NetBox IP address as the
 One VIP is one `ipam.ip-address`. The address the user types must already
 exist. Submit PATCHes that object. It does not POST a new one.
 
-Custom fields, create only if missing (GET first). All three use the group
-name VIP in NetBox:
+Custom fields, created by the operator only if missing (GET first). The API
+does not create or retype them; a missing field fails at save, from NetBox.
+All three use the group name VIP in NetBox:
 
 | Field | Object type | Type | Purpose |
 | --- | --- | --- | --- |
@@ -68,8 +69,10 @@ IPAM. The page offers no "create this IP".
 
 ## Stored build
 
-`vip_build` is a JSON object custom field holding `{"build":{...}}`. API
-responses carry it as one compact line, no pretty-print, no trailing
+`vip_build` is a JSON object custom field holding `{"build":{...}}`. Reads
+also accept the legacy form, the same document stored as one JSON string,
+and re-emit it as one compact line. Empty is null, `''`, `{}`, or missing.
+API responses carry it as one compact line, no pretty-print, no trailing
 commentary. That line is what the page shows and what `action=build` returns.
 
 Shape (store the `build` wrapper; a bare build object is accepted too):
@@ -127,9 +130,12 @@ is skipped, `vip_ssl` is stored null, and the DNS record is not touched. If a
 write fails, the response names which object failed. Do not claim the link
 exists.
 
-Load: user types the FQDN (or the IP). Resolve to the IP object. If
-`vip_build` is empty, the form stays blank aside from the FQDN and address.
-If it parses, fill the form and redraw. If it does not parse, show the raw
+Load button: FQDN only (`GET action=load`). It does not take an IP. Typing
+an IP fills the form through the address lookup, not through Load. Typing
+an SSL Common Name whose `vip_address` link is set fills the VIP address
+and loads the stored build through that same address path. If `vip_build`
+is empty, the form stays blank aside from the FQDN and address. If it
+parses, fill the form and redraw. If it does not parse, show the raw
 string and do not destroy it on the next submit unless the user confirms
 overwrite.
 
@@ -143,7 +149,8 @@ Left, top to bottom:
 1. SSL Common Name. Optional unless a listener has Client SSL checked
    (port-80 SSL Redirect does not count). When filled, background lookup must
    be a unique DNS hit. When empty, the virtual name and pool prefix are the
-   VIP address, and save does not touch a DNS record.
+   VIP address, and save does not touch a DNS record. An address lookup that
+   returns `vip_fqdn` prefills this field only while it is empty.
 2. VIP address. Background lookup. Same three states, and the checkbox checks
    only when the IP exists, its role is VIP (`role.value` `vip`), and its
    status is Active (`status.value` `active`). A hit with the wrong role or
@@ -153,8 +160,10 @@ Left, top to bottom:
    that config value is set, the page shows a multi-select instead of a text
    box, and several choices may be selected at once (build.limit keeps the
    union of the selected options' hosts).
-   Each config line is one choice: a single host, or a comma-separated pair.
-   Choosing a pair stores both hostnames in build.limit.
+   Each config line is one choice: a single host, or a comma-separated list
+   of hosts (a pair or more). Semicolons also separate choices, so one env
+   line can hold several. Choosing a list stores every hostname in
+   build.limit.
 4. Listeners. Add/remove rows. Each row: port, HTTP on/off, client SSL on/off
    (label becomes "SSL Redirect" when the port is 80; checked means the
    configured redirect iRule, builtin `/Common/_sys_https_redirect`, not a
@@ -167,9 +176,11 @@ Left, top to bottom:
    validate reject a member IP that is missing or ambiguous. The page uses
    GET action=address for the checkbox. The API check is the enforcement, not
    the checkbox.
-6. Submit. Disabled until both lookups are unique hits, limit has at least
-   one hostname, and the form validates (port integer, member IP, no mixed
-   member ports, no analytics, no iRule).
+6. Submit. Disabled until the VIP address lookup is a qualifying hit (exists,
+   role VIP, status Active), a filled SSL Common Name is a unique DNS hit
+   (an empty name needs no DNS hit), the NetBox token is set, limit has at
+   least one hostname, and the form validates (port integer, member IP, no
+   mixed member ports, no analytics, no iRule).
 7. A line showing the compact string that will be stored. It is also an
    import: paste a build string and press Import. A string that parses fills
    the form (FQDN, address, limit, listeners). A string that does not parse
@@ -177,7 +188,8 @@ Left, top to bottom:
    the field while it has focus.
 
 Right: the diagram, redrawn on every valid edit. The VIP node text is
-`VIP <address> (<fqdn>)`.
+`VIP <address> (<fqdn>)` when the SSL Common Name is filled, and
+`VIP <address>` with no empty parentheses when it is not.
 
 ```
 client
@@ -190,7 +202,7 @@ client
 
 Plain HTML/CSS boxes. No mermaid, no extra library. Token colors only
 (`var(--panel)`, `var(--bg)`, `var(--up)`). Dark and light. Header is a
-`.bar` with h1 `vip`.
+`.bar` with h1 `VIP Builder`.
 
 ## API
 
@@ -224,11 +236,15 @@ One file, `app/api/vip.php`. Dispatch on method plus `action`.
   secrets. This is how an automation finds what already exists. The page does
   not have to render the list.
 - `GET ?action=build&fqdn=<name>` or `&address=<ip>` — for the playbook.
-  `200` body is the stored object itself (`{"build":{...}}`),
-  `Content-Type: application/json`, compact, no wrapper. `404` if the IP
-  exists but `vip_build` is empty. `409` if the lookup is ambiguous. This is
-  the document the playbook fetches. `load` stays the metadata call. `build`
-  is the document.
+  Pass exactly one of the two; both or neither is `400`. `200` body is the
+  stored object itself (`{"build":{...}}`), `Content-Type: application/json`,
+  compact, no wrapper. `404` if the IP exists but `vip_build` is empty.
+  `409` if the lookup is ambiguous. This is the document the playbook
+  fetches. `load` stays the metadata call. `build` is the document.
+  Resolution differs from `load`: `&address=` looks up that IP;
+  `&fqdn=` resolves the IP from the DNS record value (A/AAAA), not from
+  `vip_address`. A CNAME, or an A record that is not the VIP, can make
+  `build` 404 or return a different IP than the page just loaded.
 - `POST ?action=validate` — body is `{"build":{...}}`. Run every save check:
   limit non-empty; one listener name and one VIP address; the VIP exists, is
   unique, role VIP, status Active; members exist and are unique; no `irule`,
@@ -245,9 +261,12 @@ One file, `app/api/vip.php`. Dispatch on method plus `action`.
   answers `500` with `failed` set to `ip_address` or `dns_record`. Do not
   create the IP or the DNS record.
 
-A missing `action` is `400`. The HTML form uses `fqdn`, `address`, `load`,
-`validate`, and `save`. It does not duplicate those checks in JavaScript
-except to disable the button.
+A missing `action` is `400`. The wrong HTTP method on a known action is
+`405`. A NetBox transport failure on a lookup is `500`, not `404`.
+`validate` and `save` reject a bad build with `400`; they do not answer
+`404`. The HTML form uses `fqdn`, `address`, `load`, `validate`, and
+`save`. It does not duplicate those checks in JavaScript except to disable
+the button.
 
 ## Files
 

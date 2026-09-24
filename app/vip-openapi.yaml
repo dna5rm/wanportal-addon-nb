@@ -76,6 +76,10 @@ paths:
           $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/InternalError"
     post:
       summary: Validate or save a build
       description: >
@@ -138,8 +142,6 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
-        "404":
-          $ref: "#/components/responses/NotFound"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
         "409":
@@ -246,7 +248,19 @@ components:
           description: The stored build as one compact JSON line, or empty.
         vip_fqdn:
           type: string
-          description: Hostname derived from the vip_ssl link; not a stored custom field. Empty when unset.
+          description: Hostname derived from the vip_ssl link; not a stored custom field. Empty when unset. Present on action=address, not on action=fqdn.
+        role:
+          type: object
+          nullable: true
+          description: >-
+            action=address only. {value, label} for the IP role, or null
+            when unset. The page treats value vip as the qualifying role.
+        status:
+          type: object
+          nullable: true
+          description: >-
+            action=address only. {value, label} for the IP status, or null
+            when unset. The page treats value active as the qualifying status.
     LoadResult:
       type: object
       properties:
