@@ -5,7 +5,7 @@
  * Lists IP addresses whose ipam.ipaddress custom field `nat` is set
  * (boolean true, or the string "true"). Columns match the IPControl
  * public report, with NetBox as the source:
- *   Tags        tag names, comma-separated
+ *   Tags        tag names, each drawn as a chicklet
  *   CIDR        network of the address field
  *   Hostname    dns_name
  *   Address     host portion of the address field; the page links it to NetBox display_url
@@ -229,6 +229,32 @@ function nat_tag_list(array $ip): string {
         }
     }
     return implode(', ', $names);
+}
+
+/**
+ * GUI-only tag pills. Color is the NetBox tag hex, or blank.
+ * Raw JSON keeps the comma-separated names.
+ */
+function nat_tag_pills(array $ip): array {
+    $pills = [];
+    foreach ($ip['tags'] ?? [] as $tag) {
+        $name = '';
+        $color = '';
+        if (is_array($tag)) {
+            $name = trim((string) ($tag['name'] ?? $tag['slug'] ?? ''));
+            $color = strtolower(ltrim(trim((string) ($tag['color'] ?? '')), '#'));
+        } elseif (is_string($tag)) {
+            $name = trim($tag);
+        }
+        if ($name === '') {
+            continue;
+        }
+        if (!preg_match('/^[0-9a-f]{6}$/', $color) && !preg_match('/^[0-9a-f]{3}$/', $color)) {
+            $color = '';
+        }
+        $pills[] = ['name' => $name, 'color' => $color];
+    }
+    return $pills;
 }
 
 $rows = [];
@@ -478,6 +504,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 ];
                 if (!$wantAll) {
                     $row['link'] = trim((string) ($ip['display_url'] ?? ''));
+                    $row['tag_pills'] = nat_tag_pills($ip);
                 }
                 $rows[] = $row;
             }
@@ -552,7 +579,9 @@ $embedMode = isset($_GET['embed']);
     }
     .bar .btn:hover { border-color: var(--muted); }
     #natReport a.addr-link { color: var(--up, #6cb6ff); font-weight: 700; text-decoration: none; }
-    #natReport a.addr-link:hover { text-decoration: underline; }'
+    #natReport a.addr-link:hover { text-decoration: underline; }
+    .pill-wrap { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .badge.tag-pill { font-weight: 600; }'
 ); ?>
 <?php if (empty($embedMode)) { nb_chrome_topnav('nat'); } ?>
 
@@ -612,6 +641,15 @@ $embedMode = isset($_GET['embed']);
                     }
                     return '<a class="addr-link" href="' + escAttr(data.link) + '" target="_blank" rel="noopener">' + escAttr(address) + '</a>';
                 }
+            }, {
+                targets: 1,
+                render: function (data, type) {
+                    var text = data && data.text ? data.text : '';
+                    if (type !== 'display') {
+                        return text;
+                    }
+                    return pillRow(data && data.tags);
+                }
             }],
             language: { emptyTable: 'Querying NetBox…' }
         });
@@ -629,6 +667,42 @@ $embedMode = isset($_GET['embed']);
                 return { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[ch];
             });
         }
+        function textOn(hex) {
+            var h = String(hex || '').replace('#', '');
+            if (h.length === 3) {
+                h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+            }
+            if (!/^[0-9a-fA-F]{6}$/.test(h)) {
+                return '#fff';
+            }
+            var r = parseInt(h.substr(0, 2), 16);
+            var g = parseInt(h.substr(2, 2), 16);
+            var b = parseInt(h.substr(4, 2), 16);
+            return ((r * 299) + (g * 587) + (b * 114)) / 1000 > 150 ? '#212529' : '#fff';
+        }
+        function tagPill(tag) {
+            var name = tag && tag.name ? tag.name : '';
+            if (!name) {
+                return '';
+            }
+            var color = tag.color ? String(tag.color).replace('#', '') : '';
+            var style = '';
+            if (/^[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(color)) {
+                style = ' style="background-color:#' + color + ';color:' + textOn(color) + '"';
+            }
+            var cls = style ? 'badge tag-pill' : 'badge bg-secondary';
+            return '<span class="' + cls + '"' + style + '>' + escAttr(name) + '</span>';
+        }
+        function pillRow(tags, scope) {
+            var html = '';
+            if (scope) {
+                html += '<span class="badge scope-pill">' + escAttr(scope) + '</span>';
+            }
+            (tags || []).forEach(function (tag) {
+                html += tagPill(tag);
+            });
+            return html ? '<span class="pill-wrap">' + html + '</span>' : dash;
+        }
         function load(offset) {
             var url = window.location.pathname + '?format=json&offset=' + offset;
             fetch(url, { headers: { 'Accept': 'application/json' } })
@@ -644,7 +718,7 @@ $embedMode = isset($_GET['embed']);
                     (data.rows || []).forEach(function (row) {
                         table.row.add([
                             { address: row.address || '', link: row.link || '' },
-                            cell(row.tags),
+                            { text: row.tags || '', tags: row.tag_pills || [] },
                             cell(row.cidr),
                             row.hostname || '',
                             row.description || ''

@@ -6,7 +6,7 @@
  * Container status. NetBox filter: mask_length__lt plus status__n=container.
  * Columns follow the IPControl zones report, with NetBox fields in place of
  * the old site/type columns:
- *   Scope         scope name, then tag names, comma-separated
+ *   Scope         scope name as a chicklet, then each tag as its own chicklet
  *   CIDR          the prefix as stored; the page links it to NetBox display_url
  *   Role          role.name, or vlan.name when role is empty
  *   Status        prefix status, centered chicklet in the NetBox GUI colors
@@ -88,6 +88,25 @@ function zones_tag_list(array $prefix): string {
         }
     }
     return implode(', ', $names);
+}
+
+function zones_tag_pills(array $prefix): array {
+    $pills = [];
+    foreach ($prefix['tags'] ?? [] as $tag) {
+        if (!is_array($tag)) {
+            continue;
+        }
+        $name = trim((string) ($tag['name'] ?? ''));
+        if ($name === '') {
+            continue;
+        }
+        $color = strtolower(ltrim(trim((string) ($tag['color'] ?? '')), '#'));
+        if (!preg_match('/^[0-9a-f]{6}$/', $color) && !preg_match('/^[0-9a-f]{3}$/', $color)) {
+            $color = '';
+        }
+        $pills[] = ['name' => $name, 'color' => $color];
+    }
+    return $pills;
 }
 
 function zones_scope_cell(string $scope, string $tags): string {
@@ -235,6 +254,8 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                 }
                 if (!$wantAll) {
                     $row['link'] = trim((string) ($prefix['display_url'] ?? ''));
+                    $row['scope_name'] = zones_scope_name($prefix['scope'] ?? null);
+                    $row['tag_pills'] = zones_tag_pills($prefix);
                 }
                 $rows[] = $row;
             }
@@ -322,7 +343,10 @@ $embedMode = isset($_GET['embed']);
     .badge.bg-nb-cyan { background-color: #17a2b8 !important; color: #fff !important; }
     .badge.bg-nb-red  { background-color: #d63939 !important; color: #fff !important; }
     #zoneReport a.cidr-link { color: var(--up, #6cb6ff); font-weight: 700; text-decoration: none; }
-    #zoneReport a.cidr-link:hover { text-decoration: underline; }'
+    #zoneReport a.cidr-link:hover { text-decoration: underline; }
+    .pill-wrap { display: inline-flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+    .badge.scope-pill { background-color: #3a4859 !important; color: #fff !important; }
+    .badge.tag-pill { font-weight: 600; }'
 ); ?>
 <?php if (empty($embedMode)) { nb_chrome_topnav('zones'); } ?>
 
@@ -380,6 +404,42 @@ $embedMode = isset($_GET['embed']);
                 return { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[ch];
             });
         }
+        function textOn(hex) {
+            var h = String(hex || '').replace('#', '');
+            if (h.length === 3) {
+                h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+            }
+            if (!/^[0-9a-fA-F]{6}$/.test(h)) {
+                return '#fff';
+            }
+            var r = parseInt(h.substr(0, 2), 16);
+            var g = parseInt(h.substr(2, 2), 16);
+            var b = parseInt(h.substr(4, 2), 16);
+            return ((r * 299) + (g * 587) + (b * 114)) / 1000 > 150 ? '#212529' : '#fff';
+        }
+        function tagPill(tag) {
+            var name = tag && tag.name ? tag.name : '';
+            if (!name) {
+                return '';
+            }
+            var color = tag.color ? String(tag.color).replace('#', '') : '';
+            var style = '';
+            if (/^[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$/.test(color)) {
+                style = ' style="background-color:#' + color + ';color:' + textOn(color) + '"';
+            }
+            var cls = style ? 'badge tag-pill' : 'badge bg-secondary';
+            return '<span class="' + cls + '"' + style + '>' + escAttr(name) + '</span>';
+        }
+        function pillRow(tags, scope) {
+            var html = '';
+            if (scope) {
+                html += '<span class="badge scope-pill">' + escAttr(scope) + '</span>';
+            }
+            (tags || []).forEach(function (tag) {
+                html += tagPill(tag);
+            });
+            return html ? '<span class="pill-wrap">' + html + '</span>' : dash;
+        }
         function statusBadge(color, label) {
             if (!label) {
                 return dash;
@@ -403,6 +463,15 @@ $embedMode = isset($_GET['embed']);
             pageLength: 25,
             order: [[0, 'asc']],
             columnDefs: [{
+                targets: 0,
+                render: function (data, type) {
+                    var text = data && data.text ? data.text : '';
+                    if (type !== 'display') {
+                        return text;
+                    }
+                    return pillRow(data && data.tags, data && data.scope);
+                }
+            }, {
                 targets: 1,
                 render: function (data, type) {
                     var cidr = data && data.cidr ? data.cidr : '';
@@ -459,7 +528,11 @@ $embedMode = isset($_GET['embed']);
                     }
                     (data.rows || []).forEach(function (row) {
                         table.row.add([
-                            cell(row.scope),
+                            {
+                                text: row.scope || '',
+                                scope: row.scope_name || '',
+                                tags: row.tag_pills || []
+                            },
                             { cidr: row.cidr || '', link: row.link || '' },
                             cell(row.role),
                             { label: row.status || '', color: row.status_color || '' },
