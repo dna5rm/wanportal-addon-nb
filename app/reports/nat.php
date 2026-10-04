@@ -441,59 +441,57 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
     }
     $base = rtrim(NETBOX_URL, '/');
     try {
-        @set_time_limit(40);
-        if ($_GET['format'] === 'cidr') {
-            $raw = (string) ($_GET['addresses'] ?? '');
-            $addresses = array_values(array_filter(array_map('trim', explode(',', $raw)), function (string $item): bool {
-                return $item !== '';
-            }));
-            if (count($addresses) > 8) {
-                $addresses = array_slice($addresses, 0, 8);
+        @set_time_limit(isset($_GET['all']) ? 60 : 40);
+        $wantAll = isset($_GET['all']);
+        $offset = $wantAll ? 0 : max(0, (int) ($_GET['offset'] ?? 0));
+        $limit = 50;
+        $rows = [];
+        $count = 0;
+        $next = 0;
+        $done = false;
+        $guard = 0;
+        do {
+            $page = nat_fetch_page(
+                $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=' . $limit . '&offset=' . $offset,
+                NETBOX_TOKEN,
+                30
+            );
+            $results = is_array($page['results'] ?? null) ? $page['results'] : [];
+            $count = (int) ($page['count'] ?? count($results));
+            foreach ($results as $ip) {
+                if (!is_array($ip) || !nat_is_set(($ip['custom_fields'] ?? [])['nat'] ?? null)) {
+                    continue;
+                }
+                $address = (string) ($ip['address'] ?? '');
+                $host = explode('/', $address, 2)[0];
+                if ($host === '') {
+                    continue;
+                }
+                $tags = nat_tag_list($ip);
+                $rows[] = [
+                    'address'     => $host,
+                    'raw'         => $address,
+                    'cidr'        => nat_network_cidr($address),
+                    'scope'       => nat_scope_cell('', $tags),
+                    'hostname'    => (string) ($ip['dns_name'] ?? ''),
+                    'description' => (string) ($ip['description'] ?? ''),
+                ];
             }
-            [$rows, $error] = nat_lookup_parents($addresses, $base, NETBOX_TOKEN);
-            echo json_encode([
-                'rows' => $rows,
-                'error' => $error,
-                'done' => true,
-            ], JSON_UNESCAPED_SLASHES);
+            $next = $offset + count($results);
+            $done = $next >= $count || $results === [];
+            $offset = $next;
+            $guard++;
+        } while ($wantAll && !$done && $guard < 40);
+        if ($wantAll) {
+            echo json_encode($rows, JSON_UNESCAPED_SLASHES);
             exit;
         }
-        $offset = max(0, (int) ($_GET['offset'] ?? 0));
-        $limit = 50;
-        $page = nat_fetch_page(
-            $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=' . $limit . '&offset=' . $offset,
-            NETBOX_TOKEN,
-            30
-        );
-        $results = is_array($page['results'] ?? null) ? $page['results'] : [];
-        $count = (int) ($page['count'] ?? count($results));
-        $rows = [];
-        foreach ($results as $ip) {
-            if (!is_array($ip) || !nat_is_set(($ip['custom_fields'] ?? [])['nat'] ?? null)) {
-                continue;
-            }
-            $address = (string) ($ip['address'] ?? '');
-            $host = explode('/', $address, 2)[0];
-            if ($host === '') {
-                continue;
-            }
-            $tags = nat_tag_list($ip);
-            $rows[] = [
-                'address'     => $host,
-                'raw'         => $address,
-                'cidr'        => nat_network_cidr($address),
-                'scope'       => nat_scope_cell('', $tags),
-                'hostname'    => (string) ($ip['dns_name'] ?? ''),
-                'description' => (string) ($ip['description'] ?? ''),
-            ];
-        }
-        $next = $offset + count($results);
         echo json_encode([
             'rows' => $rows,
-            'offset' => $offset,
+            'offset' => max(0, (int) ($_GET['offset'] ?? 0)),
             'next' => $next,
             'count' => $count,
-            'done' => $next >= $count || $results === [],
+            'done' => $done,
         ], JSON_UNESCAPED_SLASHES);
     } catch (Throwable $e) {
         error_log('nat.php: ' . $e->getMessage());
@@ -559,6 +557,9 @@ $embedMode = isset($_GET['embed']);
         </div>
         <div class="bar-right">
             <span id="natStatus" class="muted">Querying NetBox for NAT addresses…</span>
+            <a href="?format=json&amp;all=1" class="btn" title="View raw API data">
+                <i class="bi bi-code-slash"></i> Raw Data
+            </a>
         </div>
     </header>
 
