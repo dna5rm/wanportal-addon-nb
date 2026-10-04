@@ -5,6 +5,7 @@
  * Used by every sidecar page:
  *   - certs frontend      /nb/                  (frontend.php)
  *   - NetBox sites report /nb/reports/sites.php
+ *   - NetBox zones report   /nb/reports/zones.php
  *   - NetBox NAT report   /nb/reports/nat.php
  *
  * Contract (all printers, all guarded against redeclaration):
@@ -26,7 +27,7 @@
  *     green underlined link), .bar / .bar-title h1 header from base.css,
  *     no underline on any anchor
  *   - all navigation links same-tab (no target="_blank"), hrefs:
- *     /  /nb/  /nb/vip.php  /nb/reports/sites.php
+ *     /  /nb/  /nb/vip.php  /nb/reports/sites.php  /nb/reports/zones.php
  *   - embed mode (?embed or X-Wanportal-Embed header): topnav prints nothing
  *     (the SPA owns the bar), body gets padding-top 0; head tokens unchanged
  */
@@ -154,7 +155,7 @@ JS;
 
     /**
      * Shared top navigation. $active may be a shorthand key
-     * (home|portal|latency|api|certs|sites|nat) or an exact href.
+     * (home|portal|latency|api|certs|sites|zones|nat) or an exact href.
      *
      * In embed mode this prints nothing: the SPA already renders its own
      * top bar, so a second brand/nav would be a duplicate.
@@ -168,6 +169,7 @@ JS;
             'certs'     => ['/nb/',                  'CertMgr'],
             'vips'      => ['/nb/vip.php',           'VIP Builder'],
             'sites'     => ['/nb/reports/sites.php', 'Sites'],
+            'zones'     => ['/nb/reports/zones.php', 'Zones'],
             'nat'       => ['/nb/reports/nat.php',   'Public IPs'],
         ];
 
