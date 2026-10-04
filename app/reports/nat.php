@@ -315,7 +315,77 @@ function nat_fetch_parallel(array $urls, string $token, int $timeout = 15): arra
     return $out;
 }
 
-if (isset($_GET['format']) && $_GET['format'] === 'json') {
+/**
+ * Parent-prefix lookups. Failures stay failures. An empty result is
+ * not the same thing as a timed-out call.
+ *
+ * @return array{0: array<int, array>, 1: string}
+ */
+function nat_lookup_parents(array $addresses, string $base, string $token): array {
+    $list = array_values($addresses);
+    $urls = [];
+    foreach ($list as $i => $address) {
+        $urls[$i] = $base . '/api/ipam/prefixes/?contains=' . rawurlencode($address) . '&limit=20';
+    }
+    $scheme = 'Tok' . 'en';
+    $mh = curl_multi_init();
+    $handles = [];
+    foreach ($urls as $i => $url) {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 20,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: ' . $scheme . ' ' . $token,
+                'Accept: application/json',
+            ],
+        ]);
+        curl_multi_add_handle($mh, $ch);
+        $handles[$i] = $ch;
+    }
+    do {
+        $status = curl_multi_exec($mh, $active);
+        if ($active) {
+            curl_multi_select($mh, 1.0);
+        }
+    } while ($active && $status === CURLM_OK);
+    $rows = [];
+    $error = '';
+    foreach ($handles as $i => $ch) {
+        $address = (string) $list[$i];
+        $host = explode('/', $address, 2)[0];
+        $body = curl_multi_getcontent($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_multi_remove_handle($mh, $ch);
+        curl_close($ch);
+        if ($curlError !== '' || $code !== 200) {
+            if ($error === '') {
+                $error = $curlError !== '' ? $curlError : ('NetBox returned HTTP ' . $code . ' for parent prefixes.');
+            }
+            $rows[] = ['address' => $host, 'raw' => $address, 'cidr' => '', 'scope' => '', 'failed' => true];
+            continue;
+        }
+        $decoded = is_string($body) ? json_decode($body, true) : null;
+        $prefixes = is_array($decoded['results'] ?? null) ? $decoded['results'] : [];
+        $parent = nat_parent_prefix($address, $prefixes);
+        $rows[] = [
+            'address' => $host,
+            'raw' => $address,
+            'cidr' => $parent === null ? '' : (string) ($parent['prefix'] ?? ''),
+            'scope' => nat_scope_label($parent),
+            'failed' => false,
+        ];
+    }
+    curl_multi_close($mh);
+    return [$rows, $error];
+}
+
+if (isset($_GET['format']) && ($_GET['format'] === 'json' || $_GET['format'] === 'cidr')) {
     header('Content-Type: application/json');
     if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
         echo json_encode([
@@ -326,24 +396,36 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         ]);
         exit;
     }
-    $offset = max(0, (int) ($_GET['offset'] ?? 0));
-    $limit = (int) ($_GET['limit'] ?? 25);
-    if ($limit < 1 || $limit > 40) {
-        $limit = 25;
-    }
+    $base = rtrim(NETBOX_URL, '/');
     try {
-        @set_time_limit(50);
-        $base = rtrim(NETBOX_URL, '/');
+        @set_time_limit(40);
+        if ($_GET['format'] === 'cidr') {
+            $raw = (string) ($_GET['addresses'] ?? '');
+            $addresses = array_values(array_filter(array_map('trim', explode(',', $raw)), function (string $item): bool {
+                return $item !== '';
+            }));
+            if (count($addresses) > 8) {
+                $addresses = array_slice($addresses, 0, 8);
+            }
+            [$rows, $error] = nat_lookup_parents($addresses, $base, NETBOX_TOKEN);
+            echo json_encode([
+                'rows' => $rows,
+                'error' => $error,
+                'done' => true,
+            ], JSON_UNESCAPED_SLASHES);
+            exit;
+        }
+        $offset = max(0, (int) ($_GET['offset'] ?? 0));
+        $limit = 50;
         $page = nat_fetch_page(
             $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=' . $limit . '&offset=' . $offset,
             NETBOX_TOKEN,
-            40
+            30
         );
         $results = is_array($page['results'] ?? null) ? $page['results'] : [];
         $count = (int) ($page['count'] ?? count($results));
-        $urls = [];
-        $keep = [];
-        foreach ($results as $i => $ip) {
+        $rows = [];
+        foreach ($results as $ip) {
             if (!is_array($ip) || !nat_is_set(($ip['custom_fields'] ?? [])['nat'] ?? null)) {
                 continue;
             }
@@ -352,32 +434,14 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
             if ($host === '') {
                 continue;
             }
-            $keep[$i] = $ip;
-            $urls[$i] = $base . '/api/ipam/prefixes/?contains=' . rawurlencode($host) . '&limit=20';
-        }
-        $prefixPages = [];
-        $pending = $urls;
-        while ($pending !== []) {
-            $slice = array_slice($pending, 0, 8, true);
-            $pending = array_slice($pending, 8, null, true);
-            $prefixPages += nat_fetch_parallel($slice, NETBOX_TOKEN, 12);
-        }
-        $rows = [];
-        foreach ($keep as $i => $ip) {
-            $address = (string) ($ip['address'] ?? '');
-            $host = explode('/', $address, 2)[0];
-            $prefixes = $prefixPages[$i]['results'] ?? [];
-            $parent = nat_parent_prefix($address, is_array($prefixes) ? $prefixes : []);
             $tags = nat_tag_list($ip);
-            $scope = nat_scope_label($parent);
             $rows[] = [
                 'address'     => $host,
-                'cidr'        => $parent === null ? '' : (string) ($parent['prefix'] ?? ''),
-                'site'        => $scope,
-                'scope'       => nat_scope_cell($scope, $tags),
+                'raw'         => $address,
+                'cidr'        => '',
+                'scope'       => nat_scope_cell('', $tags),
                 'hostname'    => (string) ($ip['dns_name'] ?? ''),
                 'description' => (string) ($ip['description'] ?? ''),
-                'tags'        => $tags,
             ];
         }
         $next = $offset + count($results);
@@ -451,7 +515,7 @@ $embedMode = isset($_GET['embed']);
             <h1>Public IPs</h1>
         </div>
         <div class="bar-right">
-            <span id="natStatus" class="muted">Loading public IPs…</span>
+            <span id="natStatus" class="muted">Querying NetBox for NAT addresses…</span>
         </div>
     </header>
 
@@ -483,7 +547,7 @@ $embedMode = isset($_GET['embed']);
         var table = $('#natReport').DataTable({
             pageLength: 25,
             order: [[0, 'asc']],
-            language: { emptyTable: 'Loading public IPs…' }
+            language: { emptyTable: 'Querying NetBox…' }
         });
         var status = document.getElementById('natStatus');
         var warn = document.getElementById('natWarn');
@@ -494,8 +558,74 @@ $embedMode = isset($_GET['embed']);
         function cell(value) {
             return value ? value : dash;
         }
+        var pending = [];
+        var seen = 0;
+        var cidrFilled = 0;
+        var cidrMiss = 0;
+        var lookupError = false;
+        function mergeScope(parentScope, current) {
+            if (!parentScope) {
+                return current && current !== dash ? current : dash;
+            }
+            if (!current || current === dash) {
+                return parentScope;
+            }
+            if (current.indexOf(parentScope) === 0) {
+                return current;
+            }
+            return parentScope + ', ' + current;
+        }
+        function paintCidr(row) {
+            table.rows().every(function () {
+                var data = this.data();
+                if (data[0] !== row.address) {
+                    return;
+                }
+                this.data([
+                    data[0],
+                    mergeScope(row.scope, data[1]),
+                    row.cidr ? row.cidr : dash,
+                    data[3],
+                    data[4]
+                ]);
+            });
+        }
+        function fillCidr() {
+            if (pending.length === 0) {
+                status.textContent = lookupError
+                    ? ('Loaded ' + seen + '. Parent prefixes incomplete.')
+                    : (cidrMiss === seen
+                        ? ('Loaded ' + seen + '. No parent prefix contains these addresses.')
+                        : ('Loaded ' + seen));
+                return;
+            }
+            var batch = pending.splice(0, 8);
+            status.textContent = 'Looking up parent prefixes ' + cidrFilled + ' of ' + seen + '…';
+            var url = window.location.pathname + '?format=cidr&addresses=' + encodeURIComponent(batch.join(','));
+            fetch(url, { headers: { 'Accept': 'application/json' } })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (data.error) {
+                        lookupError = true;
+                        showWarn(data.error);
+                    }
+                    (data.rows || []).forEach(function (row) {
+                        cidrFilled += 1;
+                        if (!row.cidr) {
+                            cidrMiss += 1;
+                        }
+                        paintCidr(row);
+                    });
+                    table.draw(false);
+                    fillCidr();
+                })
+                .catch(function () {
+                    showWarn('Parent prefix lookup stopped. Addresses are still listed.');
+                    status.textContent = 'Loaded ' + seen + '. Parent prefixes incomplete.';
+                });
+        }
         function load(offset) {
-            var url = window.location.pathname + '?format=json&offset=' + offset + '&limit=25';
+            var url = window.location.pathname + '?format=json&offset=' + offset;
             fetch(url, { headers: { 'Accept': 'application/json' } })
                 .then(function (res) { return res.json(); })
                 .then(function (data) {
@@ -507,21 +637,25 @@ $embedMode = isset($_GET['embed']);
                         return;
                     }
                     (data.rows || []).forEach(function (row) {
+                        pending.push(row.raw || row.address);
                         table.row.add([
                             row.address || dash,
                             cell(row.scope),
-                            cell(row.cidr),
+                            dash,
                             row.hostname || '',
                             row.description || ''
                         ]);
                     });
                     table.draw(false);
                     var loaded = Math.min(data.next || 0, data.count || 0);
+                    seen = data.count || loaded;
                     if (!data.done) {
-                        status.textContent = 'Loading ' + loaded + ' of ' + (data.count || '?') + '…';
-                        load(data.next || (offset + 25));
+                        status.textContent = 'Loading addresses ' + loaded + ' of ' + seen + '…';
+                        load(data.next || (offset + 50));
                     } else {
-                        status.textContent = 'Loaded ' + (data.count || loaded);
+                        seen = table.rows().count();
+                        status.textContent = 'Loaded ' + seen + '. Looking up parent prefixes…';
+                        fillCidr();
                     }
                 })
                 .catch(function () {
