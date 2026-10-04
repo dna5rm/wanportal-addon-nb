@@ -8,7 +8,7 @@
  *   Scope         scope name, then tag names, comma-separated
  *   CIDR          the prefix as stored
  *   Role          role.name, or vlan.name when role is empty
- *   Status        prefix status label
+ *   Status        prefix status, centered chicklet in the NetBox GUI colors
  *   Environment   custom field environment, mapped prod/dev/test only
  *   Zone          custom field firewall_zone, drawn as a color chicklet
  *
@@ -142,6 +142,24 @@ function zones_status_label($status): string {
 }
 
 /**
+ * Prefix.status colors from NetBox PrefixStatusChoices, the same names
+ * the GUI paints: container gray, active blue, reserved cyan, deprecated red.
+ */
+function zones_status_color($status): string {
+    if (!is_array($status)) {
+        return '';
+    }
+    $value = strtolower(trim((string) ($status['value'] ?? '')));
+    $map = [
+        'container'  => 'gray',
+        'active'     => 'blue',
+        'reserved'   => 'cyan',
+        'deprecated' => 'red',
+    ];
+    return $map[$value] ?? '';
+}
+
+/**
  * environment is only prod, dev, or test. Anything else is blank,
  * which the table draws as an em dash.
  */
@@ -170,6 +188,7 @@ function zones_row(array $prefix): ?array {
         'cidr'         => $cidr,
         'role'         => zones_role_name($prefix['role'] ?? null) ?: zones_vlan_label($prefix['vlan'] ?? null),
         'status'       => zones_status_label($prefix['status'] ?? null),
+        'status_color' => zones_status_color($prefix['status'] ?? null),
         'environment'  => zones_environment(($prefix['custom_fields'] ?? [])['environment'] ?? null),
         'zone'         => zones_color(($prefix['custom_fields'] ?? [])['firewall_zone'] ?? null),
     ];
@@ -292,7 +311,11 @@ $embedMode = isset($_GET['embed']);
         background-color: #000 !important;
         color: #f8f9fa !important;
         box-shadow: inset 0 0 0 1px #8b95a1;
-    }'
+    }
+    .badge.bg-nb-gray { background-color: #49566c !important; color: #fff !important; }
+    .badge.bg-nb-blue { background-color: #066fd1 !important; color: #fff !important; }
+    .badge.bg-nb-cyan { background-color: #17a2b8 !important; color: #fff !important; }
+    .badge.bg-nb-red  { background-color: #d63939 !important; color: #fff !important; }'
 ); ?>
 <?php if (empty($embedMode)) { nb_chrome_topnav('zones'); } ?>
 
@@ -318,7 +341,7 @@ $embedMode = isset($_GET['embed']);
                     <th>Scope</th>
                     <th>CIDR</th>
                     <th>Role</th>
-                    <th>Status</th>
+                    <th class="text-center">Status</th>
                     <th>Environment</th>
                     <th class="text-center">Zone</th>
                 </tr>
@@ -345,6 +368,18 @@ $embedMode = isset($_GET['embed']);
         function cell(value) {
             return value ? value : dash;
         }
+        function statusBadge(color, label) {
+            if (!label) {
+                return dash;
+            }
+            var cls = {
+                gray: 'bg-nb-gray',
+                blue: 'bg-nb-blue',
+                cyan: 'bg-nb-cyan',
+                red: 'bg-nb-red'
+            }[color] || 'bg-secondary';
+            return '<span class="badge ' + cls + '">' + label + '</span>';
+        }
         function badge(color) {
             if (!color) {
                 return dash;
@@ -356,6 +391,16 @@ $embedMode = isset($_GET['embed']);
             pageLength: 25,
             order: [[0, 'asc']],
             columnDefs: [{
+                targets: 3,
+                className: 'text-center',
+                render: function (data, type) {
+                    var label = data && data.label ? data.label : '';
+                    if (type !== 'display') {
+                        return label;
+                    }
+                    return statusBadge(data && data.color ? data.color : '', label);
+                }
+            }, {
                 targets: 5,
                 className: 'text-center',
                 render: function (data, type) {
@@ -390,7 +435,7 @@ $embedMode = isset($_GET['embed']);
                             cell(row.scope),
                             cell(row.cidr),
                             cell(row.role),
-                            cell(row.status),
+                            { label: row.status || '', color: row.status_color || '' },
                             cell(row.environment),
                             row.zone || ''
                         ]);
