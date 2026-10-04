@@ -48,22 +48,30 @@ function nat_is_set($value): bool {
 }
 
 /**
- * Follow NetBox pagination. Throws on transport or HTTP failure.
+ * Follow NetBox pagination until the deadline. A single slow call must
+ * not run until the portal proxy drops the sidecar.
  * The scheme word is assembled so a redacted tool transcript cannot
  * be copied back into this file.
+ *
+ * @return array{0: array, 1: bool} results, and whether pagination finished
  */
-function nat_fetch_all(string $endpoint, string $token): array {
+function nat_fetch_all(string $endpoint, string $token, float $deadline): array {
     $all = [];
     $url = $endpoint;
     $scheme = 'Tok' . 'en';
+    $complete = true;
 
     do {
+        if (microtime(true) >= $deadline) {
+            $complete = false;
+            break;
+        }
         $ch = curl_init();
         curl_setopt_array($ch, [
             CURLOPT_URL            => $url,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 10,
-            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => 8,
             // Same as sites.php: work NetBox is often HTTPS with a private CA.
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
@@ -85,13 +93,28 @@ function nat_fetch_all(string $endpoint, string $token): array {
         }
         $data = json_decode($response, true);
         if (!is_array($data)) {
-            throw new RuntimeException('NetBox is not reachable. Showing an empty table.');
+            throw new RuntimeException('NetBox returned a response that was not JSON. Showing an empty table.');
         }
         $all = array_merge($all, $data['results'] ?? []);
         $url = $data['next'] ?? null;
     } while (is_string($url) && $url !== '');
 
-    return $all;
+    return [$all, $complete];
+}
+
+/** Coarse bucket so many addresses share one parent-prefix query. */
+function nat_bucket(string $host): ?string {
+    $bin = @inet_pton($host);
+    if ($bin === false) {
+        return null;
+    }
+    if (strlen($bin) === 4) {
+        return inet_ntop($bin & inet_pton('255.255.0.0')) . '/16';
+    }
+    if (strlen($bin) === 16) {
+        return inet_ntop($bin & (str_repeat("\xff", 6) . str_repeat("\x00", 10))) . '/48';
+    }
+    return null;
 }
 
 function nat_parse_cidr(string $cidr): ?array {
@@ -215,22 +238,55 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
     $errorMsg = 'NETBOX_URL or NETBOX_TOKEN is not set on this sidecar. Showing an empty table.';
 } else {
     try {
+        // Stay under the portal proxy timeout. A hung sidecar is the
+        // "Error reading from remote server" page, not this warning.
+        @set_time_limit(20);
+        $deadline = microtime(true) + 12;
         $base = rtrim(NETBOX_URL, '/');
-        $ips = nat_fetch_all($base . '/api/ipam/ip-addresses/?cf_nat=true&limit=500', NETBOX_TOKEN);
+        [$ips, $ipsComplete] = nat_fetch_all(
+            $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=200',
+            NETBOX_TOKEN,
+            $deadline
+        );
+        $wanted = [];
         foreach ($ips as $ip) {
-            if (!is_array($ip)) {
+            if (!is_array($ip) || !nat_is_set(($ip['custom_fields'] ?? [])['nat'] ?? null)) {
                 continue;
             }
-            $cf = is_array($ip['custom_fields'] ?? null) ? $ip['custom_fields'] : [];
-            if (!nat_is_set($cf['nat'] ?? null)) {
+            $wanted[] = $ip;
+        }
+        $byBucket = [];
+        $buckets = [];
+        foreach ($wanted as $ip) {
+            $host = explode('/', (string) ($ip['address'] ?? ''), 2)[0];
+            $bucket = nat_bucket($host);
+            if ($bucket === null) {
                 continue;
             }
+            $buckets[$bucket] = true;
+        }
+        foreach (array_keys($buckets) as $bucket) {
+            if (microtime(true) >= $deadline) {
+                break;
+            }
+            [$found] = nat_fetch_all(
+                $base . '/api/ipam/prefixes/?within=' . rawurlencode($bucket) . '&limit=200',
+                NETBOX_TOKEN,
+                $deadline
+            );
+            [$ancestors] = nat_fetch_all(
+                $base . '/api/ipam/prefixes/?contains=' . rawurlencode($bucket) . '&limit=20',
+                NETBOX_TOKEN,
+                $deadline
+            );
+            $byBucket[$bucket] = array_merge($found, $ancestors);
+        }
+        $prefixNote = count($byBucket) < count($buckets);
+        foreach ($wanted as $ip) {
             $address = (string) ($ip['address'] ?? '');
             $host = explode('/', $address, 2)[0];
-            $prefixes = $host === '' ? [] : nat_fetch_all(
-                $base . '/api/ipam/prefixes/?contains=' . rawurlencode($host) . '&limit=50',
-                NETBOX_TOKEN
-            );
+            $bucket = nat_bucket($host);
+            $prefixes = ($bucket !== null && isset($byBucket[$bucket])) ? $byBucket[$bucket] : [];
             $parent = nat_parent_prefix($address, $prefixes);
             $rows[] = [
                 'site'        => nat_scope_label($parent),
@@ -242,9 +298,13 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
             ];
         }
         usort($rows, function (array $a, array $b): int {
-            return [$a['site'], $a['cidr'], $a['address']]
-                <=> [$b['site'], $b['cidr'], $b['address']];
+            return [$a['address'], $a['site']] <=> [$b['address'], $b['site']];
         });
+        if (!$ipsComplete) {
+            $errorMsg = 'Address list was cut short so the page could load. Showing a partial table.';
+        } elseif ($prefixNote && $rows !== []) {
+            $errorMsg = 'Some parent prefixes were not loaded in time. Those rows show an em dash for CIDR.';
+        }
     } catch (Throwable $e) {
         error_log('nat.php: ' . $e->getMessage());
         $rows = [];
