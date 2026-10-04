@@ -5,10 +5,10 @@
  * Lists IP addresses whose ipam.ipaddress custom field `nat` is set
  * (boolean true, or the string "true"). Columns match the IPControl
  * public report, with NetBox as the source:
- *   Scope       scope name and tag names, comma-separated
- *   CIDR        that parent prefix, or an em dash when there is none
+ *   Tags        tag names, comma-separated
+ *   CIDR        network of the address field
  *   Hostname    dns_name
- *   Address     the IP as stored
+ *   Address     host portion of the address field
  *   Description
  *
  * An unknown API filter is ignored by NetBox, so cf_nat=true is only a
@@ -569,7 +569,7 @@ $embedMode = isset($_GET['embed']);
             <thead>
                 <tr>
                     <th>Address</th>
-                    <th>Scope</th>
+                    <th>Tags</th>
                     <th>CIDR</th>
                     <th>Hostname</th>
                     <th>Description</th>
