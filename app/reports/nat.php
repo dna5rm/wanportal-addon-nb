@@ -8,7 +8,7 @@
  *   Tags        tag names, comma-separated
  *   CIDR        network of the address field
  *   Hostname    dns_name
- *   Address     host portion of the address field
+ *   Address     host portion of the address field; the page links it to NetBox display_url
  *   Description
  *
  * An unknown API filter is ignored by NetBox, so cf_nat=true is only a
@@ -468,7 +468,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                     continue;
                 }
                 $tags = nat_tag_list($ip);
-                $rows[] = [
+                $row = [
                     'address'     => $host,
                     'raw'         => $address,
                     'cidr'        => nat_network_cidr($address),
@@ -476,6 +476,10 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                     'hostname'    => (string) ($ip['dns_name'] ?? ''),
                     'description' => (string) ($ip['description'] ?? ''),
                 ];
+                if (!$wantAll) {
+                    $row['link'] = trim((string) ($ip['display_url'] ?? ''));
+                }
+                $rows[] = $row;
             }
             $next = $offset + count($results);
             $done = $next >= $count || $results === [];
@@ -546,7 +550,9 @@ $embedMode = isset($_GET['embed']);
         cursor: pointer;
         text-decoration: none;
     }
-    .bar .btn:hover { border-color: var(--muted); }'
+    .bar .btn:hover { border-color: var(--muted); }
+    #natReport a.addr-link { color: var(--up, #6cb6ff); font-weight: 700; text-decoration: none; }
+    #natReport a.addr-link:hover { text-decoration: underline; }'
 ); ?>
 <?php if (empty($embedMode)) { nb_chrome_topnav('nat'); } ?>
 
@@ -591,6 +597,22 @@ $embedMode = isset($_GET['embed']);
         var table = $('#natReport').DataTable({
             pageLength: 25,
             order: [[0, 'asc']],
+            columnDefs: [{
+                targets: 0,
+                render: function (data, type) {
+                    var address = data && data.address ? data.address : '';
+                    if (type !== 'display') {
+                        return address;
+                    }
+                    if (!address) {
+                        return dash;
+                    }
+                    if (!data.link) {
+                        return address;
+                    }
+                    return '<a class="addr-link" href="' + escAttr(data.link) + '" target="_blank" rel="noopener">' + escAttr(address) + '</a>';
+                }
+            }],
             language: { emptyTable: 'Querying NetBox…' }
         });
         var status = document.getElementById('natStatus');
@@ -601,6 +623,11 @@ $embedMode = isset($_GET['embed']);
         }
         function cell(value) {
             return value ? value : dash;
+        }
+        function escAttr(value) {
+            return String(value).replace(/[&"<>]/g, function (ch) {
+                return { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[ch];
+            });
         }
         function load(offset) {
             var url = window.location.pathname + '?format=json&offset=' + offset;
@@ -616,7 +643,7 @@ $embedMode = isset($_GET['embed']);
                     }
                     (data.rows || []).forEach(function (row) {
                         table.row.add([
-                            row.address || dash,
+                            { address: row.address || '', link: row.link || '' },
                             cell(row.tags),
                             cell(row.cidr),
                             row.hostname || '',

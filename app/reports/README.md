@@ -19,7 +19,7 @@ Query options: `?embed=1` drops the topnav for iframe use, and
 the same site list in the NetBox UI.
 
 nat.php lists IP addresses whose `nat` custom field is true. Columns are
-Address, Tags, CIDR (network of the address field), Hostname, and Description.
+Address (bold link to the NetBox IP page; the raw dump does not include the link), Tags, CIDR (network of the address field), Hostname, and Description.
 
 zones.php lists prefixes whose mask is shorter than `$zonesMaskLengthLt`
 (default 24) and drops Container status (`status__n=container`). The CIDR
