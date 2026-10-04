@@ -5,6 +5,7 @@
  * Used by every sidecar page:
  *   - certs frontend      /nb/                  (frontend.php)
  *   - NetBox sites report /nb/reports/sites.php
+ *   - NetBox NAT report   /nb/reports/nat.php
  *
  * Contract (all printers, all guarded against redeclaration):
  *   head(string $title = 'wanportal', array $extraHead = [], string $pageStyle = '')
@@ -153,7 +154,7 @@ JS;
 
     /**
      * Shared top navigation. $active may be a shorthand key
-     * (home|portal|latency|api|certs|sites) or an exact href.
+     * (home|portal|latency|api|certs|sites|nat) or an exact href.
      *
      * In embed mode this prints nothing: the SPA already renders its own
      * top bar, so a second brand/nav would be a duplicate.
@@ -167,6 +168,7 @@ JS;
             'certs'     => ['/nb/',                  'CertMgr'],
             'vips'      => ['/nb/vip.php',           'VIP Builder'],
             'sites'     => ['/nb/reports/sites.php', 'Sites'],
+            'nat'       => ['/nb/reports/nat.php',   'Public IPs'],
         ];
 
         echo "<nav class=\"topnav\">\n";

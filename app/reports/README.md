@@ -17,3 +17,7 @@ token the page renders an error instead of the table.
 Query options: `?embed=1` drops the topnav for iframe use, and
 `?format=json` returns the site rows as JSON. The NetBox button jumps to
 the same site list in the NetBox UI.
+
+nat.php lists IP addresses whose `nat` custom field is true. Columns are
+Scope (scope name and tag names, comma-separated), CIDR (em dash when
+there is no parent prefix), dns name, address, and description.
