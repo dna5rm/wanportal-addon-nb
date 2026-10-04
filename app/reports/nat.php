@@ -385,7 +385,50 @@ function nat_lookup_parents(array $addresses, string $base, string $token): arra
     return [$rows, $error];
 }
 
-if (isset($_GET['format']) && ($_GET['format'] === 'json' || $_GET['format'] === 'cidr')) {
+/**
+ * Network prefix of an address field such as 3.9.66.245/32.
+ * The host is shown in Address. This is the CIDR column.
+ */
+function nat_network_cidr(string $address): string {
+    $parts = explode('/', $address, 2);
+    if (count($parts) !== 2) {
+        return '';
+    }
+    $host = $parts[0];
+    $bits = (int) $parts[1];
+    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) && $bits >= 0 && $bits <= 32) {
+        $ip = ip2long($host);
+        if ($ip === false) {
+            return $address;
+        }
+        $mask = $bits === 0 ? 0 : ((-1 << (32 - $bits)) & 0xFFFFFFFF);
+        return long2ip($ip & $mask) . '/' . $bits;
+    }
+    if (filter_var($host, FILTER_VALIDATE_IP, FILTER_FLAG_IPV6) && $bits >= 0 && $bits <= 128) {
+        $packed = inet_pton($host);
+        if ($packed === false) {
+            return $address;
+        }
+        $left = $bits;
+        $out = '';
+        foreach (array_values(unpack('C*', $packed)) as $byte) {
+            if ($left >= 8) {
+                $out .= chr($byte);
+                $left -= 8;
+            } elseif ($left > 0) {
+                $out .= chr($byte & ((0xFF << (8 - $left)) & 0xFF));
+                $left = 0;
+            } else {
+                $out .= "\0";
+            }
+        }
+        $net = inet_ntop($out);
+        return ($net === false ? $host : $net) . '/' . $bits;
+    }
+    return $address;
+}
+
+if (isset($_GET['format']) && $_GET['format'] === 'json') {
     header('Content-Type: application/json');
     if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
         echo json_encode([
@@ -438,7 +481,7 @@ if (isset($_GET['format']) && ($_GET['format'] === 'json' || $_GET['format'] ===
             $rows[] = [
                 'address'     => $host,
                 'raw'         => $address,
-                'cidr'        => '',
+                'cidr'        => nat_network_cidr($address),
                 'scope'       => nat_scope_cell('', $tags),
                 'hostname'    => (string) ($ip['dns_name'] ?? ''),
                 'description' => (string) ($ip['description'] ?? ''),
@@ -558,72 +601,6 @@ $embedMode = isset($_GET['embed']);
         function cell(value) {
             return value ? value : dash;
         }
-        var pending = [];
-        var seen = 0;
-        var cidrFilled = 0;
-        var cidrMiss = 0;
-        var lookupError = false;
-        function mergeScope(parentScope, current) {
-            if (!parentScope) {
-                return current && current !== dash ? current : dash;
-            }
-            if (!current || current === dash) {
-                return parentScope;
-            }
-            if (current.indexOf(parentScope) === 0) {
-                return current;
-            }
-            return parentScope + ', ' + current;
-        }
-        function paintCidr(row) {
-            table.rows().every(function () {
-                var data = this.data();
-                if (data[0] !== row.address) {
-                    return;
-                }
-                this.data([
-                    data[0],
-                    mergeScope(row.scope, data[1]),
-                    row.cidr ? row.cidr : dash,
-                    data[3],
-                    data[4]
-                ]);
-            });
-        }
-        function fillCidr() {
-            if (pending.length === 0) {
-                status.textContent = lookupError
-                    ? ('Loaded ' + seen + '. Parent prefixes incomplete.')
-                    : (cidrMiss === seen
-                        ? ('Loaded ' + seen + '. No parent prefix contains these addresses.')
-                        : ('Loaded ' + seen));
-                return;
-            }
-            var batch = pending.splice(0, 8);
-            status.textContent = 'Looking up parent prefixes ' + cidrFilled + ' of ' + seen + '…';
-            var url = window.location.pathname + '?format=cidr&addresses=' + encodeURIComponent(batch.join(','));
-            fetch(url, { headers: { 'Accept': 'application/json' } })
-                .then(function (res) { return res.json(); })
-                .then(function (data) {
-                    if (data.error) {
-                        lookupError = true;
-                        showWarn(data.error);
-                    }
-                    (data.rows || []).forEach(function (row) {
-                        cidrFilled += 1;
-                        if (!row.cidr) {
-                            cidrMiss += 1;
-                        }
-                        paintCidr(row);
-                    });
-                    table.draw(false);
-                    fillCidr();
-                })
-                .catch(function () {
-                    showWarn('Parent prefix lookup stopped. Addresses are still listed.');
-                    status.textContent = 'Loaded ' + seen + '. Parent prefixes incomplete.';
-                });
-        }
         function load(offset) {
             var url = window.location.pathname + '?format=json&offset=' + offset;
             fetch(url, { headers: { 'Accept': 'application/json' } })
@@ -637,25 +614,22 @@ $embedMode = isset($_GET['embed']);
                         return;
                     }
                     (data.rows || []).forEach(function (row) {
-                        pending.push(row.raw || row.address);
                         table.row.add([
                             row.address || dash,
                             cell(row.scope),
-                            dash,
+                            cell(row.cidr),
                             row.hostname || '',
                             row.description || ''
                         ]);
                     });
                     table.draw(false);
                     var loaded = Math.min(data.next || 0, data.count || 0);
-                    seen = data.count || loaded;
+                    var total = data.count || loaded;
                     if (!data.done) {
-                        status.textContent = 'Loading addresses ' + loaded + ' of ' + seen + '…';
+                        status.textContent = 'Loading addresses ' + loaded + ' of ' + total + '…';
                         load(data.next || (offset + 50));
                     } else {
-                        seen = table.rows().count();
-                        status.textContent = 'Loaded ' + seen + '. Looking up parent prefixes…';
-                        fillCidr();
+                        status.textContent = 'Loaded ' + table.rows().count();
                     }
                 })
                 .catch(function () {
