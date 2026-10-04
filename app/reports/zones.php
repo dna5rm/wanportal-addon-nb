@@ -8,6 +8,8 @@
  *   Scope         scope name, then tag names, comma-separated
  *   CIDR          the prefix as stored
  *   Role          role.name, or vlan.name when role is empty
+ *   Status        prefix status label
+ *   Environment   custom field environment, mapped prod/dev/test only
  *   Zone          custom field firewall_zone, drawn as a color chicklet
  *
  * ?embed=1 drops the topnav. ?format=json pages the rows. ?format=json&all=1
@@ -132,6 +134,30 @@ function zones_color($value): string {
     return is_string($part) ? $part : '';
 }
 
+function zones_status_label($status): string {
+    if (!is_array($status)) {
+        return '';
+    }
+    return trim((string) ($status['label'] ?? $status['value'] ?? ''));
+}
+
+/**
+ * environment is only prod, dev, or test. Anything else is blank,
+ * which the table draws as an em dash.
+ */
+function zones_environment($value): string {
+    if (!is_scalar($value)) {
+        return '';
+    }
+    $key = strtolower(trim((string) $value));
+    $map = [
+        'prod' => 'Production',
+        'dev'  => 'Development',
+        'test' => 'Test (UAT)',
+    ];
+    return $map[$key] ?? '';
+}
+
 function zones_row(array $prefix): ?array {
     $cidr = trim((string) ($prefix['prefix'] ?? ''));
     if ($cidr === '') {
@@ -143,6 +169,8 @@ function zones_row(array $prefix): ?array {
         'tags'         => $tags,
         'cidr'         => $cidr,
         'role'         => zones_role_name($prefix['role'] ?? null) ?: zones_vlan_label($prefix['vlan'] ?? null),
+        'status'       => zones_status_label($prefix['status'] ?? null),
+        'environment'  => zones_environment(($prefix['custom_fields'] ?? [])['environment'] ?? null),
         'zone'         => zones_color(($prefix['custom_fields'] ?? [])['firewall_zone'] ?? null),
     ];
 }
@@ -290,6 +318,8 @@ $embedMode = isset($_GET['embed']);
                     <th>Scope</th>
                     <th>CIDR</th>
                     <th>Role</th>
+                    <th>Status</th>
+                    <th>Environment</th>
                     <th class="text-center">Zone</th>
                 </tr>
             </thead>
@@ -326,7 +356,7 @@ $embedMode = isset($_GET['embed']);
             pageLength: 25,
             order: [[0, 'asc']],
             columnDefs: [{
-                targets: 3,
+                targets: 5,
                 className: 'text-center',
                 render: function (data, type) {
                     if (type !== 'display') {
@@ -360,6 +390,8 @@ $embedMode = isset($_GET['embed']);
                             cell(row.scope),
                             cell(row.cidr),
                             cell(row.role),
+                            cell(row.status),
+                            cell(row.environment),
                             row.zone || ''
                         ]);
                     });
