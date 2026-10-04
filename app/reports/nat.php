@@ -472,7 +472,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                     'address'     => $host,
                     'raw'         => $address,
                     'cidr'        => nat_network_cidr($address),
-                    'scope'       => nat_scope_cell('', $tags),
+                    'tags'        => nat_scope_cell('', $tags),
                     'hostname'    => (string) ($ip['dns_name'] ?? ''),
                     'description' => (string) ($ip['description'] ?? ''),
                 ];
@@ -557,7 +557,7 @@ $embedMode = isset($_GET['embed']);
         </div>
         <div class="bar-right">
             <span id="natStatus" class="muted">Querying NetBox for NAT addresses…</span>
-            <a href="?format=json&amp;all=1" class="btn" title="View raw API data">
+            <a href="/nb/reports/nat.php?format=json&amp;all=1" class="btn" target="_blank" rel="noopener" title="View raw API data">
                 <i class="bi bi-code-slash"></i> Raw Data
             </a>
         </div>
@@ -617,7 +617,7 @@ $embedMode = isset($_GET['embed']);
                     (data.rows || []).forEach(function (row) {
                         table.row.add([
                             row.address || dash,
-                            cell(row.scope),
+                            cell(row.tags),
                             cell(row.cidr),
                             row.hostname || '',
                             row.description || ''
