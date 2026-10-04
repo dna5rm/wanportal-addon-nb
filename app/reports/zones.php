@@ -7,7 +7,7 @@
  * zones report, with NetBox fields in place of the old site/type columns:
  *   Scope         scope name, then tag names, comma-separated
  *   CIDR          the prefix as stored
- *   Network Type  role.name, or the VLAN name and id when role is empty
+ *   Role          role.name, or vlan.name when role is empty
  *   Zone          custom field firewall_zone, drawn as a color chicklet
  *
  * ?embed=1 drops the topnav. ?format=json pages the rows. ?format=json&all=1
@@ -106,26 +106,13 @@ function zones_role_name($role): string {
 }
 
 /**
- * VLAN label when the prefix has no role. vid is the VLAN number, not
- * the NetBox object id. "Visitor" + 920 becomes "Visitor (920)".
+ * VLAN name when the prefix has no role. The id is not shown.
  */
 function zones_vlan_label($vlan): string {
     if (!is_array($vlan)) {
         return '';
     }
-    $name = trim((string) ($vlan['name'] ?? ''));
-    $vid = $vlan['vid'] ?? null;
-    $hasVid = $vid !== null && $vid !== '';
-    if ($name !== '' && $hasVid) {
-        return $name . ' (' . $vid . ')';
-    }
-    if ($name !== '') {
-        return $name;
-    }
-    if ($hasVid) {
-        return (string) $vid;
-    }
-    return trim((string) ($vlan['display'] ?? ''));
+    return trim((string) ($vlan['name'] ?? ''));
 }
 
 /**
@@ -155,7 +142,7 @@ function zones_row(array $prefix): ?array {
         'scope'        => zones_scope_cell(zones_scope_name($prefix['scope'] ?? null), $tags),
         'tags'         => $tags,
         'cidr'         => $cidr,
-        'network_type' => zones_role_name($prefix['role'] ?? null) ?: zones_vlan_label($prefix['vlan'] ?? null),
+        'role'         => zones_role_name($prefix['role'] ?? null) ?: zones_vlan_label($prefix['vlan'] ?? null),
         'zone'         => zones_color(($prefix['custom_fields'] ?? [])['firewall_zone'] ?? null),
     ];
 }
@@ -302,7 +289,7 @@ $embedMode = isset($_GET['embed']);
                 <tr>
                     <th>Scope</th>
                     <th>CIDR</th>
-                    <th>Network Type</th>
+                    <th>Role</th>
                     <th class="text-center">Zone</th>
                 </tr>
             </thead>
@@ -372,7 +359,7 @@ $embedMode = isset($_GET['embed']);
                         table.row.add([
                             cell(row.scope),
                             cell(row.cidr),
-                            cell(row.network_type),
+                            cell(row.role),
                             row.zone || ''
                         ]);
                     });
