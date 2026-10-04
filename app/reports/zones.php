@@ -321,7 +321,7 @@ $embedMode = isset($_GET['embed']);
     .badge.bg-nb-blue { background-color: #066fd1 !important; color: #fff !important; }
     .badge.bg-nb-cyan { background-color: #17a2b8 !important; color: #fff !important; }
     .badge.bg-nb-red  { background-color: #d63939 !important; color: #fff !important; }
-    #zoneReport a.cidr-link { color: var(--up, #6cb6ff); text-decoration: none; }
+    #zoneReport a.cidr-link { color: var(--up, #6cb6ff); font-weight: 700; text-decoration: none; }
     #zoneReport a.cidr-link:hover { text-decoration: underline; }'
 ); ?>
 <?php if (empty($embedMode)) { nb_chrome_topnav('zones'); } ?>
@@ -415,7 +415,7 @@ $embedMode = isset($_GET['embed']);
                     if (!data.link) {
                         return cidr;
                     }
-                    return '<a class="cidr-link" href="' + escAttr(data.link) + '">' + escAttr(cidr) + '</a>';
+                    return '<a class="cidr-link" href="' + escAttr(data.link) + '" target="_blank" rel="noopener">' + escAttr(cidr) + '</a>';
                 }
             }, {
                 targets: 3,
