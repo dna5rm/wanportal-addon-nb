@@ -2,9 +2,12 @@
 /**
  * reports/zones.php — NetBox prefix zones report.
  *
- * Lists prefixes whose mask length is this value or shorter (mask length
- * <= $zonesMaskLengthLte, inclusive), excluding Container status. NetBox
- * ignores mask_length__lt, so the filter must be mask_length__lte plus
+ * Lists prefixes whose mask length is between $zonesMaskLengthGte and
+ * $zonesMaskLengthLte (defaults 21 and 28: /21 through /28, inclusive),
+ * excluding Container status. A mask length below the gte value is larger
+ * than a /21 and one above the lte value is smaller than a /28; neither
+ * is listed. NetBox ignores mask_length__lt and mask_length__gt, so the
+ * filter must be mask_length__gte plus mask_length__lte plus
  * status__n=container.
  * Columns follow the IPControl zones report, with NetBox fields in place of
  * the old site/type columns:
@@ -35,10 +38,13 @@ if (!defined('NETBOX_TOKEN')) {
     define('NETBOX_TOKEN', getenv('NETBOX_TOKEN') ?: '');
 }
 
-// Prefixes with a mask length of this value or shorter (<=, inclusive).
-// Change this one value to move the cut. NetBox ignores mask_length__lt,
-// so the filter must be mask_length__lte.
-$zonesMaskLengthLte = 22;
+// Prefixes with a mask length between the two values, inclusive on both
+// ends: change the two values to move the range. A mask length below the
+// gte value is larger than a /21 and one above the lte value is smaller
+// than a /28. NetBox ignores mask_length__lt and mask_length__gt, so the
+// filter must be mask_length__gte plus mask_length__lte.
+$zonesMaskLengthGte = 21;
+$zonesMaskLengthLte = 28;
 
 function zones_fetch_page(string $endpoint, string $token, int $timeout = 30): array {
     $scheme = 'Tok' . 'en';
@@ -241,7 +247,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         $guard = 0;
         do {
             $page = zones_fetch_page(
-                $base . '/api/ipam/prefixes/?mask_length__lte=' . (int) $zonesMaskLengthLte . '&status__n=container&limit=' . $limit . '&offset=' . $offset,
+                $base . '/api/ipam/prefixes/?mask_length__gte=' . (int) $zonesMaskLengthGte . '&mask_length__lte=' . (int) $zonesMaskLengthLte . '&status__n=container&limit=' . $limit . '&offset=' . $offset,
                 NETBOX_TOKEN,
                 30
             );
