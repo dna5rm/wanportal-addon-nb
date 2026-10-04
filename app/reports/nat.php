@@ -55,7 +55,7 @@ function nat_is_set($value): bool {
  *
  * @return array{0: array, 1: bool} results, and whether pagination finished
  */
-function nat_fetch_all(string $endpoint, string $token, float $deadline): array {
+function nat_fetch_all(string $endpoint, string $token, float $deadline, int $timeout = 8): array {
     $all = [];
     $url = $endpoint;
     $scheme = 'Tok' . 'en';
@@ -71,7 +71,7 @@ function nat_fetch_all(string $endpoint, string $token, float $deadline): array 
             CURLOPT_URL            => $url,
             CURLOPT_RETURNTRANSFER => true,
             CURLOPT_CONNECTTIMEOUT => 5,
-            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_TIMEOUT        => $timeout,
             // Same as sites.php: work NetBox is often HTTPS with a private CA.
             CURLOPT_SSL_VERIFYPEER => false,
             CURLOPT_SSL_VERIFYHOST => false,
@@ -86,7 +86,7 @@ function nat_fetch_all(string $endpoint, string $token, float $deadline): array 
         curl_close($ch);
 
         if ($response === false || $curlError !== '') {
-            throw new RuntimeException('Could not reach NetBox (' . ($curlError !== '' ? $curlError : 'no response') . '). Showing an empty table.');
+            throw new RuntimeException('Could not reach ' . $url . ' (' . ($curlError !== '' ? $curlError : 'no response') . '). Showing an empty table.');
         }
         if ($httpCode !== 200) {
             throw new RuntimeException('NetBox returned HTTP ' . $httpCode . ' for ' . $url . '. Showing an empty table.');
@@ -240,13 +240,14 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
     try {
         // Stay under the portal proxy timeout. A hung sidecar is the
         // "Error reading from remote server" page, not this warning.
-        @set_time_limit(20);
-        $deadline = microtime(true) + 12;
+        @set_time_limit(55);
+        $started = microtime(true);
         $base = rtrim(NETBOX_URL, '/');
         [$ips, $ipsComplete] = nat_fetch_all(
-            $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=200',
+            $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=1000',
             NETBOX_TOKEN,
-            $deadline
+            $started + 40,
+            40
         );
         $wanted = [];
         foreach ($ips as $ip) {
@@ -255,8 +256,13 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
             }
             $wanted[] = $ip;
         }
+        // A slow address scan has already used the proxy budget. Skip
+        // parent-prefix calls rather than hang until Apache drops us.
+        $lookupPrefixes = (microtime(true) - $started) < 8;
+        $deadline = $started + 20;
         $byBucket = [];
         $buckets = [];
+        if ($lookupPrefixes) {
         foreach ($wanted as $ip) {
             $host = explode('/', (string) ($ip['address'] ?? ''), 2)[0];
             $bucket = nat_bucket($host);
@@ -281,7 +287,8 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
             );
             $byBucket[$bucket] = array_merge($found, $ancestors);
         }
-        $prefixNote = count($byBucket) < count($buckets);
+        }
+        $prefixNote = $lookupPrefixes && count($byBucket) < count($buckets);
         foreach ($wanted as $ip) {
             $address = (string) ($ip['address'] ?? '');
             $host = explode('/', $address, 2)[0];
@@ -302,6 +309,8 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
         });
         if (!$ipsComplete) {
             $errorMsg = 'Address list was cut short so the page could load. Showing a partial table.';
+        } elseif (!$lookupPrefixes && $rows !== []) {
+            $errorMsg = 'Parent prefixes were skipped so the page could load. CIDR and scope may be an em dash.';
         } elseif ($prefixNote && $rows !== []) {
             $errorMsg = 'Some parent prefixes were not loaded in time. Those rows show an em dash for CIDR.';
         }
