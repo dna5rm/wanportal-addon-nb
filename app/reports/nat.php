@@ -62,8 +62,11 @@ function nat_fetch_all(string $endpoint, string $token): array {
         curl_setopt_array($ch, [
             CURLOPT_URL            => $url,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_CONNECTTIMEOUT => 10,
             CURLOPT_TIMEOUT        => 30,
+            // Same as sites.php: work NetBox is often HTTPS with a private CA.
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
             CURLOPT_HTTPHEADER     => [
                 'Authorization: ' . $scheme . ' ' . $token,
                 'Accept: application/json',
@@ -75,10 +78,10 @@ function nat_fetch_all(string $endpoint, string $token): array {
         curl_close($ch);
 
         if ($response === false || $curlError !== '') {
-            throw new RuntimeException('NetBox is not reachable. Showing an empty table.');
+            throw new RuntimeException('Could not reach NetBox (' . ($curlError !== '' ? $curlError : 'no response') . '). Showing an empty table.');
         }
         if ($httpCode !== 200) {
-            throw new RuntimeException('NetBox is not reachable. Showing an empty table.');
+            throw new RuntimeException('NetBox returned HTTP ' . $httpCode . ' for ' . $url . '. Showing an empty table.');
         }
         $data = json_decode($response, true);
         if (!is_array($data)) {
@@ -209,12 +212,11 @@ $rows = [];
 $errorMsg = null;
 
 if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
-    $errorMsg = 'NetBox is not configured. Showing an empty table.';
+    $errorMsg = 'NETBOX_URL or NETBOX_TOKEN is not set on this sidecar. Showing an empty table.';
 } else {
     try {
         $base = rtrim(NETBOX_URL, '/');
         $ips = nat_fetch_all($base . '/api/ipam/ip-addresses/?cf_nat=true&limit=500', NETBOX_TOKEN);
-        $prefixes = nat_fetch_all($base . '/api/ipam/prefixes/?limit=500', NETBOX_TOKEN);
         foreach ($ips as $ip) {
             if (!is_array($ip)) {
                 continue;
@@ -224,6 +226,11 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
                 continue;
             }
             $address = (string) ($ip['address'] ?? '');
+            $host = explode('/', $address, 2)[0];
+            $prefixes = $host === '' ? [] : nat_fetch_all(
+                $base . '/api/ipam/prefixes/?contains=' . rawurlencode($host) . '&limit=50',
+                NETBOX_TOKEN
+            );
             $parent = nat_parent_prefix($address, $prefixes);
             $rows[] = [
                 'site'        => nat_scope_label($parent),
@@ -241,7 +248,7 @@ if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
     } catch (Throwable $e) {
         error_log('nat.php: ' . $e->getMessage());
         $rows = [];
-        $errorMsg = 'NetBox is not reachable. Showing an empty table.';
+        $errorMsg = $e->getMessage();
     }
 }
 
