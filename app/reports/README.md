@@ -23,5 +23,5 @@ Address, Tags, CIDR (network of the address field), Hostname, and Description.
 
 zones.php lists prefixes whose mask is shorter than `$zonesMaskLengthLt`
 (default 24). Columns are Scope (scope name and tag names), CIDR, Network
-Type (`role.name`), and Zone (the `firewall_zone` custom field, drawn as a
-color chicklet).
+Type (`role.name`, or the VLAN name and id when role is empty), and Zone
+(the `firewall_zone` custom field, drawn as a color chicklet).
