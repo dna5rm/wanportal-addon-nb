@@ -234,99 +234,168 @@ function nat_tag_list(array $ip): string {
 $rows = [];
 $errorMsg = null;
 
-if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
-    $errorMsg = 'NETBOX_URL or NETBOX_TOKEN is not set on this sidecar. Showing an empty table.';
-} else {
-    try {
-        // Stay under the portal proxy timeout. A hung sidecar is the
-        // "Error reading from remote server" page, not this warning.
-        @set_time_limit(55);
-        $started = microtime(true);
-        $base = rtrim(NETBOX_URL, '/');
-        [$ips, $ipsComplete] = nat_fetch_all(
-            $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=1000',
-            NETBOX_TOKEN,
-            $started + 40,
-            40
-        );
-        $wanted = [];
-        foreach ($ips as $ip) {
-            if (!is_array($ip) || !nat_is_set(($ip['custom_fields'] ?? [])['nat'] ?? null)) {
-                continue;
-            }
-            $wanted[] = $ip;
-        }
-        // A slow address scan has already used the proxy budget. Skip
-        // parent-prefix calls rather than hang until Apache drops us.
-        $lookupPrefixes = (microtime(true) - $started) < 8;
-        $deadline = $started + 20;
-        $byBucket = [];
-        $buckets = [];
-        if ($lookupPrefixes) {
-        foreach ($wanted as $ip) {
-            $host = explode('/', (string) ($ip['address'] ?? ''), 2)[0];
-            $bucket = nat_bucket($host);
-            if ($bucket === null) {
-                continue;
-            }
-            $buckets[$bucket] = true;
-        }
-        foreach (array_keys($buckets) as $bucket) {
-            if (microtime(true) >= $deadline) {
-                break;
-            }
-            [$found] = nat_fetch_all(
-                $base . '/api/ipam/prefixes/?within=' . rawurlencode($bucket) . '&limit=200',
-                NETBOX_TOKEN,
-                $deadline
-            );
-            [$ancestors] = nat_fetch_all(
-                $base . '/api/ipam/prefixes/?contains=' . rawurlencode($bucket) . '&limit=20',
-                NETBOX_TOKEN,
-                $deadline
-            );
-            $byBucket[$bucket] = array_merge($found, $ancestors);
-        }
-        }
-        $prefixNote = $lookupPrefixes && count($byBucket) < count($buckets);
-        foreach ($wanted as $ip) {
-            $address = (string) ($ip['address'] ?? '');
-            $host = explode('/', $address, 2)[0];
-            $bucket = nat_bucket($host);
-            $prefixes = ($bucket !== null && isset($byBucket[$bucket])) ? $byBucket[$bucket] : [];
-            $parent = nat_parent_prefix($address, $prefixes);
-            $rows[] = [
-                'site'        => nat_scope_label($parent),
-                'cidr'        => $parent === null ? '' : (string) ($parent['prefix'] ?? ''),
-                'hostname'    => (string) ($ip['dns_name'] ?? ''),
-                'address'     => $address,
-                'description' => (string) ($ip['description'] ?? ''),
-                'tags'        => nat_tag_list($ip),
-            ];
-        }
-        usort($rows, function (array $a, array $b): int {
-            return [$a['address'], $a['site']] <=> [$b['address'], $b['site']];
-        });
-        if (!$ipsComplete) {
-            $errorMsg = 'Address list was cut short so the page could load. Showing a partial table.';
-        } elseif (!$lookupPrefixes && $rows !== []) {
-            $errorMsg = 'Parent prefixes were skipped so the page could load. CIDR and scope may be an em dash.';
-        } elseif ($prefixNote && $rows !== []) {
-            $errorMsg = 'Some parent prefixes were not loaded in time. Those rows show an em dash for CIDR.';
-        }
-    } catch (Throwable $e) {
-        error_log('nat.php: ' . $e->getMessage());
-        $rows = [];
-        $errorMsg = $e->getMessage();
+/**
+ * One NetBox request. Does not follow pagination.
+ */
+function nat_fetch_page(string $endpoint, string $token, int $timeout = 40): array {
+    $scheme = 'Tok' . 'en';
+    $ch = curl_init();
+    curl_setopt_array($ch, [
+        CURLOPT_URL            => $endpoint,
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_CONNECTTIMEOUT => 5,
+        CURLOPT_TIMEOUT        => $timeout,
+        CURLOPT_SSL_VERIFYPEER => false,
+        CURLOPT_SSL_VERIFYHOST => false,
+        CURLOPT_HTTPHEADER     => [
+            'Authorization: ' . $scheme . ' ' . $token,
+            'Accept: application/json',
+        ],
+    ]);
+    $response = curl_exec($ch);
+    $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curlError = curl_error($ch);
+    curl_close($ch);
+    if ($response === false || $curlError !== '') {
+        throw new RuntimeException('Could not reach ' . $endpoint . ' (' . ($curlError !== '' ? $curlError : 'no response') . ').');
     }
+    if ($httpCode !== 200) {
+        throw new RuntimeException('NetBox returned HTTP ' . $httpCode . ' for ' . $endpoint . '.');
+    }
+    $data = json_decode($response, true);
+    if (!is_array($data)) {
+        throw new RuntimeException('NetBox returned a response that was not JSON.');
+    }
+    return $data;
+}
+
+/**
+ * Several NetBox requests at once. Keys match the input URL list.
+ */
+function nat_fetch_parallel(array $urls, string $token, int $timeout = 15): array {
+    if ($urls === []) {
+        return [];
+    }
+    $scheme = 'Tok' . 'en';
+    $mh = curl_multi_init();
+    $handles = [];
+    foreach ($urls as $i => $url) {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => $url,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_TIMEOUT        => $timeout,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_SSL_VERIFYHOST => false,
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: ' . $scheme . ' ' . $token,
+                'Accept: application/json',
+            ],
+        ]);
+        curl_multi_add_handle($mh, $ch);
+        $handles[$i] = $ch;
+    }
+    do {
+        $status = curl_multi_exec($mh, $active);
+        if ($active) {
+            curl_multi_select($mh, 1.0);
+        }
+    } while ($active && $status === CURLM_OK);
+    $out = [];
+    foreach ($handles as $i => $ch) {
+        $body = curl_multi_getcontent($ch);
+        $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_multi_remove_handle($mh, $ch);
+        curl_close($ch);
+        $decoded = is_string($body) ? json_decode($body, true) : null;
+        $out[$i] = ($code === 200 && is_array($decoded)) ? $decoded : ['results' => []];
+    }
+    curl_multi_close($mh);
+    return $out;
 }
 
 if (isset($_GET['format']) && $_GET['format'] === 'json') {
     header('Content-Type: application/json');
-    if ($errorMsg !== null) {
-        echo json_encode(['error' => $errorMsg, 'rows' => []], JSON_UNESCAPED_SLASHES);
-    } else {
-        echo json_encode($rows, JSON_UNESCAPED_SLASHES);
+    if (NETBOX_TOKEN === '' || NETBOX_URL === '') {
+        echo json_encode([
+            'error' => 'NETBOX_URL or NETBOX_TOKEN is not set on this sidecar.',
+            'rows' => [],
+            'done' => true,
+            'count' => 0,
+        ]);
+        exit;
+    }
+    $offset = max(0, (int) ($_GET['offset'] ?? 0));
+    $limit = (int) ($_GET['limit'] ?? 25);
+    if ($limit < 1 || $limit > 40) {
+        $limit = 25;
+    }
+    try {
+        @set_time_limit(50);
+        $base = rtrim(NETBOX_URL, '/');
+        $page = nat_fetch_page(
+            $base . '/api/ipam/ip-addresses/?cf_nat=true&limit=' . $limit . '&offset=' . $offset,
+            NETBOX_TOKEN,
+            40
+        );
+        $results = is_array($page['results'] ?? null) ? $page['results'] : [];
+        $count = (int) ($page['count'] ?? count($results));
+        $urls = [];
+        $keep = [];
+        foreach ($results as $i => $ip) {
+            if (!is_array($ip) || !nat_is_set(($ip['custom_fields'] ?? [])['nat'] ?? null)) {
+                continue;
+            }
+            $address = (string) ($ip['address'] ?? '');
+            $host = explode('/', $address, 2)[0];
+            if ($host === '') {
+                continue;
+            }
+            $keep[$i] = $ip;
+            $urls[$i] = $base . '/api/ipam/prefixes/?contains=' . rawurlencode($host) . '&limit=20';
+        }
+        $prefixPages = [];
+        $pending = $urls;
+        while ($pending !== []) {
+            $slice = array_slice($pending, 0, 8, true);
+            $pending = array_slice($pending, 8, null, true);
+            $prefixPages += nat_fetch_parallel($slice, NETBOX_TOKEN, 12);
+        }
+        $rows = [];
+        foreach ($keep as $i => $ip) {
+            $address = (string) ($ip['address'] ?? '');
+            $host = explode('/', $address, 2)[0];
+            $prefixes = $prefixPages[$i]['results'] ?? [];
+            $parent = nat_parent_prefix($address, is_array($prefixes) ? $prefixes : []);
+            $tags = nat_tag_list($ip);
+            $scope = nat_scope_label($parent);
+            $rows[] = [
+                'address'     => $host,
+                'cidr'        => $parent === null ? '' : (string) ($parent['prefix'] ?? ''),
+                'site'        => $scope,
+                'scope'       => nat_scope_cell($scope, $tags),
+                'hostname'    => (string) ($ip['dns_name'] ?? ''),
+                'description' => (string) ($ip['description'] ?? ''),
+                'tags'        => $tags,
+            ];
+        }
+        $next = $offset + count($results);
+        echo json_encode([
+            'rows' => $rows,
+            'offset' => $offset,
+            'next' => $next,
+            'count' => $count,
+            'done' => $next >= $count || $results === [],
+        ], JSON_UNESCAPED_SLASHES);
+    } catch (Throwable $e) {
+        error_log('nat.php: ' . $e->getMessage());
+        echo json_encode([
+            'error' => $e->getMessage(),
+            'rows' => [],
+            'done' => true,
+            'count' => 0,
+        ]);
     }
     exit;
 }
@@ -382,15 +451,11 @@ $embedMode = isset($_GET['embed']);
             <h1>Public IPs</h1>
         </div>
         <div class="bar-right">
-            <a href="?format=json" class="btn" title="View raw API data">
-                <i class="bi bi-code-slash"></i> Raw Data
-            </a>
+            <span id="natStatus" class="muted">Loading public IPs…</span>
         </div>
     </header>
 
-    <?php if ($errorMsg !== null): ?>
-    <div class="alert alert-warning" role="alert"><?= htmlspecialchars($errorMsg) ?></div>
-    <?php endif; ?>
+    <div id="natWarn" class="alert alert-warning" role="alert" hidden></div>
 
     <div class="row">
         <table id="natReport" class="table table-striped table-bordered">
@@ -403,17 +468,7 @@ $embedMode = isset($_GET['embed']);
                     <th>Description</th>
                 </tr>
             </thead>
-            <tbody>
-                <?php foreach ($rows as $row): ?>
-                <tr>
-                    <td><?= htmlspecialchars($row['address']) ?></td>
-                    <td><?= htmlspecialchars(nat_scope_cell($row['site'], $row['tags'])) ?></td>
-                    <td><?= htmlspecialchars(nat_or_dash($row['cidr'])) ?></td>
-                    <td><?= htmlspecialchars($row['hostname']) ?></td>
-                    <td><?= htmlspecialchars($row['description']) ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
+            <tbody></tbody>
         </table>
     </div>
 </div>
@@ -424,10 +479,57 @@ $embedMode = isset($_GET['embed']);
 <script src="https://cdn.datatables.net/1.11.5/js/dataTables.bootstrap5.min.js"></script>
 <script>
     $(document).ready(function () {
-        $('#natReport').DataTable({
+        var dash = '\u2014';
+        var table = $('#natReport').DataTable({
             pageLength: 25,
-            order: [[0, 'asc']]
+            order: [[0, 'asc']],
+            language: { emptyTable: 'Loading public IPs…' }
         });
+        var status = document.getElementById('natStatus');
+        var warn = document.getElementById('natWarn');
+        function showWarn(text) {
+            warn.hidden = false;
+            warn.textContent = text;
+        }
+        function cell(value) {
+            return value ? value : dash;
+        }
+        function load(offset) {
+            var url = window.location.pathname + '?format=json&offset=' + offset + '&limit=25';
+            fetch(url, { headers: { 'Accept': 'application/json' } })
+                .then(function (res) { return res.json(); })
+                .then(function (data) {
+                    if (data.error) {
+                        showWarn(data.error);
+                        status.textContent = 'Stopped';
+                        table.settings()[0].oLanguage.sEmptyTable = 'No data available in table';
+                        table.draw(false);
+                        return;
+                    }
+                    (data.rows || []).forEach(function (row) {
+                        table.row.add([
+                            row.address || dash,
+                            cell(row.scope),
+                            cell(row.cidr),
+                            row.hostname || '',
+                            row.description || ''
+                        ]);
+                    });
+                    table.draw(false);
+                    var loaded = Math.min(data.next || 0, data.count || 0);
+                    if (!data.done) {
+                        status.textContent = 'Loading ' + loaded + ' of ' + (data.count || '?') + '…';
+                        load(data.next || (offset + 25));
+                    } else {
+                        status.textContent = 'Loaded ' + (data.count || loaded);
+                    }
+                })
+                .catch(function () {
+                    showWarn('The report stopped loading. Refresh to continue.');
+                    status.textContent = 'Stopped';
+                });
+        }
+        load(0);
     });
 </script>
 <?php nb_chrome_foot(); ?>
