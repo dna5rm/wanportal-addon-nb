@@ -21,8 +21,9 @@ the same site list in the NetBox UI.
 nat.php lists IP addresses whose `nat` custom field is true. Columns are
 Address (bold link to the NetBox IP page; the raw dump does not include the link), Tags (each tag as a chicklet in its NetBox color), CIDR (network of the address field), Hostname, and Description.
 
-zones.php lists prefixes whose mask is shorter than `$zonesMaskLengthLt`
-(default 24) and drops Container status (`status__n=container`). The CIDR
+zones.php lists prefixes whose mask length is at most `$zonesMaskLengthLte`
+(default 22) via `mask_length__lte` and drops Container status
+(`status__n=container`). The CIDR
 cell links to that prefix in the NetBox GUI (`display_url`); the raw JSON
 dump does not include the link. Scope is a chicklet, and each tag is its
 own chicklet in the tag's NetBox color. Columns are Scope (scope name and tag names), CIDR, Role

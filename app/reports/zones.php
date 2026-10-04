@@ -2,8 +2,10 @@
 /**
  * reports/zones.php — NetBox prefix zones report.
  *
- * Lists prefixes whose mask is shorter than $zonesMaskLengthLt, excluding
- * Container status. NetBox filter: mask_length__lt plus status__n=container.
+ * Lists prefixes whose mask length is this value or shorter (mask length
+ * <= $zonesMaskLengthLte, inclusive), excluding Container status. NetBox
+ * ignores mask_length__lt, so the filter must be mask_length__lte plus
+ * status__n=container.
  * Columns follow the IPControl zones report, with NetBox fields in place of
  * the old site/type columns:
  *   Scope         scope name as a chicklet, then each tag as its own chicklet
@@ -33,9 +35,10 @@ if (!defined('NETBOX_TOKEN')) {
     define('NETBOX_TOKEN', getenv('NETBOX_TOKEN') ?: '');
 }
 
-// Prefixes with a mask shorter than this length. Change this one value
-// to move the cut. NetBox filter: mask_length__lt.
-$zonesMaskLengthLt = 24;
+// Prefixes with a mask length of this value or shorter (<=, inclusive).
+// Change this one value to move the cut. NetBox ignores mask_length__lt,
+// so the filter must be mask_length__lte.
+$zonesMaskLengthLte = 22;
 
 function zones_fetch_page(string $endpoint, string $token, int $timeout = 30): array {
     $scheme = 'Tok' . 'en';
@@ -238,7 +241,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         $guard = 0;
         do {
             $page = zones_fetch_page(
-                $base . '/api/ipam/prefixes/?mask_length__lt=' . (int) $zonesMaskLengthLt . '&status__n=container&limit=' . $limit . '&offset=' . $offset,
+                $base . '/api/ipam/prefixes/?mask_length__lte=' . (int) $zonesMaskLengthLte . '&status__n=container&limit=' . $limit . '&offset=' . $offset,
                 NETBOX_TOKEN,
                 30
             );
