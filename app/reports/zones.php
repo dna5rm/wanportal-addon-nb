@@ -7,7 +7,7 @@
  * Columns follow the IPControl zones report, with NetBox fields in place of
  * the old site/type columns:
  *   Scope         scope name, then tag names, comma-separated
- *   CIDR          the prefix as stored
+ *   CIDR          the prefix as stored; the page links it to NetBox display_url
  *   Role          role.name, or vlan.name when role is empty
  *   Status        prefix status, centered chicklet in the NetBox GUI colors
  *   Environment   custom field environment, mapped prod/dev/test only
@@ -230,9 +230,13 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
                     continue;
                 }
                 $row = zones_row($prefix);
-                if ($row !== null) {
-                    $rows[] = $row;
+                if ($row === null) {
+                    continue;
                 }
+                if (!$wantAll) {
+                    $row['link'] = trim((string) ($prefix['display_url'] ?? ''));
+                }
+                $rows[] = $row;
             }
             $next = $offset + count($results);
             $done = $next >= $count || $results === [];
@@ -316,7 +320,9 @@ $embedMode = isset($_GET['embed']);
     .badge.bg-nb-gray { background-color: #49566c !important; color: #fff !important; }
     .badge.bg-nb-blue { background-color: #066fd1 !important; color: #fff !important; }
     .badge.bg-nb-cyan { background-color: #17a2b8 !important; color: #fff !important; }
-    .badge.bg-nb-red  { background-color: #d63939 !important; color: #fff !important; }'
+    .badge.bg-nb-red  { background-color: #d63939 !important; color: #fff !important; }
+    #zoneReport a.cidr-link { color: var(--up, #6cb6ff); text-decoration: none; }
+    #zoneReport a.cidr-link:hover { text-decoration: underline; }'
 ); ?>
 <?php if (empty($embedMode)) { nb_chrome_topnav('zones'); } ?>
 
@@ -369,6 +375,11 @@ $embedMode = isset($_GET['embed']);
         function cell(value) {
             return value ? value : dash;
         }
+        function escAttr(value) {
+            return String(value).replace(/[&"<>]/g, function (ch) {
+                return { '&': '&amp;', '"': '&quot;', '<': '&lt;', '>': '&gt;' }[ch];
+            });
+        }
         function statusBadge(color, label) {
             if (!label) {
                 return dash;
@@ -392,6 +403,21 @@ $embedMode = isset($_GET['embed']);
             pageLength: 25,
             order: [[0, 'asc']],
             columnDefs: [{
+                targets: 1,
+                render: function (data, type) {
+                    var cidr = data && data.cidr ? data.cidr : '';
+                    if (type !== 'display') {
+                        return cidr;
+                    }
+                    if (!cidr) {
+                        return dash;
+                    }
+                    if (!data.link) {
+                        return cidr;
+                    }
+                    return '<a class="cidr-link" href="' + escAttr(data.link) + '">' + escAttr(cidr) + '</a>';
+                }
+            }, {
                 targets: 3,
                 className: 'text-center',
                 render: function (data, type) {
@@ -434,7 +460,7 @@ $embedMode = isset($_GET['embed']);
                     (data.rows || []).forEach(function (row) {
                         table.row.add([
                             cell(row.scope),
-                            cell(row.cidr),
+                            { cidr: row.cidr || '', link: row.link || '' },
                             cell(row.role),
                             { label: row.status || '', color: row.status_color || '' },
                             cell(row.environment),
