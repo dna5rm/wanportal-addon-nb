@@ -2,9 +2,10 @@
 /**
  * reports/zones.php — NetBox prefix zones report.
  *
- * Lists prefixes whose mask is shorter than $zonesMaskLengthLt. The NetBox
- * filter is mask_length__lt. Columns follow the IPControl
- * zones report, with NetBox fields in place of the old site/type columns:
+ * Lists prefixes whose mask is shorter than $zonesMaskLengthLt, excluding
+ * Container status. NetBox filter: mask_length__lt plus status__n=container.
+ * Columns follow the IPControl zones report, with NetBox fields in place of
+ * the old site/type columns:
  *   Scope         scope name, then tag names, comma-separated
  *   CIDR          the prefix as stored
  *   Role          role.name, or vlan.name when role is empty
@@ -218,7 +219,7 @@ if (isset($_GET['format']) && $_GET['format'] === 'json') {
         $guard = 0;
         do {
             $page = zones_fetch_page(
-                $base . '/api/ipam/prefixes/?mask_length__lt=' . (int) $zonesMaskLengthLt . '&limit=' . $limit . '&offset=' . $offset,
+                $base . '/api/ipam/prefixes/?mask_length__lt=' . (int) $zonesMaskLengthLt . '&status__n=container&limit=' . $limit . '&offset=' . $offset,
                 NETBOX_TOKEN,
                 30
             );
