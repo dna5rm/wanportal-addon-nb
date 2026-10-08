@@ -198,7 +198,14 @@ function get_reservation(array $data, array $config): array {
     }
 
     $container_name = format_container_name($account, $region);
-    $prefix         = get_prefix_by_description($container_name, $config);
+
+    // Resolve by TAGS first (account + region tags are the durable identity
+    // of a reservation; the description can be edited or removed), then fall
+    // back to the legacy description lookup.
+    $prefix = get_prefix_by_tags($account, $region, $config);
+    if (!$prefix) {
+        $prefix = get_prefix_by_description($container_name, $config);
+    }
 
     if (!$prefix) {
         return format_response(

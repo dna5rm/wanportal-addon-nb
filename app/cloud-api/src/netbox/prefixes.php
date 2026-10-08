@@ -187,7 +187,7 @@ function get_prefix_by_description(string $description, array $config): ?array {
 
     $result = netbox_request(
         'GET',
-        '/ipam/prefixes/?description=' . urlencode($description),
+        '/ipam/prefixes/?description=' . urlencode($description) . '&limit=0',
         null,
         $config
     );
@@ -205,4 +205,62 @@ function get_prefix_by_description(string $description, array $config): ?array {
     }
 
     return null;
+}
+
+/**
+ * Look up a prefix in NetBox by its reservation tags.
+ * Reservation prefixes are tagged with the account and region (uppercase
+ * tag names). NetBox matches the "tag" filter against the tag SLUG, which
+ * is lowercase — uppercase filter values are rejected with HTTP 400 — so
+ * both values are lowercased before the query. The tag pair is the durable
+ * identity of a reservation: it survives description edits or a missing
+ * description.
+ *
+ * @param string $account Account name (e.g. "example01")
+ * @param string $region  Region name (e.g. "eu-west-1")
+ * @param array  $config  Configuration array
+ * @return array|null NetBox prefix object or null if not found
+ */
+function get_prefix_by_tags(string $account, string $region, array $config): ?array {
+    if (empty($account) || empty($region)) {
+        debug_log("Account and region are required for tag lookup", $config);
+        return null;
+    }
+
+    $account_tag = strtolower(trim($account));
+    $region_tag  = strtolower(trim($region));
+
+    $result = netbox_request(
+        'GET',
+        '/ipam/prefixes/?tag=' . urlencode($account_tag)
+            . '&tag=' . urlencode($region_tag)
+            . '&limit=0',
+        null,
+        $config
+    );
+
+    if (!$result['success'] || empty($result['data']['results'])) {
+        debug_log("No prefix found with tags '$account_tag' + '$region_tag'", $config);
+        return null;
+    }
+
+    $results = array_values($result['data']['results']);
+
+    // Single match needs no disambiguation
+    if (count($results) === 1) {
+        return $results[0];
+    }
+
+    // Duplicate allocation: prefer the prefix described by the canonical
+    // container name, otherwise the lowest id so the answer is stable.
+    $container_name = format_container_name($account, $region);
+    foreach ($results as $prefix) {
+        if (($prefix['description'] ?? '') === $container_name) {
+            return $prefix;
+        }
+    }
+
+    usort($results, fn($a, $b) => ($a['id'] ?? PHP_INT_MAX) <=> ($b['id'] ?? PHP_INT_MAX));
+    debug_log("Multiple prefixes tagged '$account_tag' + '$region_tag'; using lowest id " . $results[0]['id'], $config);
+    return $results[0];
 }
