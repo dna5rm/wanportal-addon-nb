@@ -278,6 +278,12 @@ components:
                   blockSize:
                     type: string
                     example: "24"
+            tags:
+              type: array
+              description: Tag names carried by the reservation prefix
+              items:
+                type: string
+                example: AWS-DEVELOPMENT
 
     FreeBlocksResponse:
       type: object

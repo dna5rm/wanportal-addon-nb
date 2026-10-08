@@ -215,23 +215,77 @@ function get_reservation(array $data, array $config): array {
         );
     }
 
-    [$blockAddr, $blockSize] = explode('/', $prefix['prefix']);
-
     return format_response(
         true,
-        [
-            'account'           => $account,
-            'region'            => $region,
-            'container'         => $container_name,
-            'container_details' => $prefix,
-            'block_result'      => [[
-                'blockAddr' => $blockAddr,
-                'blockSize' => $blockSize
-            ]]
-        ],
+        reservation_view($prefix, $account, $region),
         'Reservation details retrieved successfully',
         200
     );
+}
+
+/**
+ * Build the documented reservation view from a NetBox prefix object.
+ *
+ * Completes the ReservationResponse `data` shape: account_id is recovered
+ * from the prefix comments ("Reserved for account <name> (<id>) in
+ * <region>" — the first parenthesised group, null when there are no
+ * usable comments), environment is derived from the AWS- tag in long form
+ * (AWS-DEVELOPMENT -> aws-development) with the custom_fields.environment
+ * short code as the fallback, and tags lists the prefix tag names in
+ * NetBox order.
+ *
+ * @param array  $prefix  NetBox prefix object
+ * @param string $account Account name as requested
+ * @param string $region  Region name as requested
+ * @return array Response `data` for the reservation
+ */
+function reservation_view(array $prefix, string $account, string $region): array {
+    [$blockAddr, $blockSize] = explode('/', $prefix['prefix']);
+
+    // The account id survives only as comments text — the number inside
+    // the first parenthesised group. Empty or parenthesis-free comments
+    // mean null, never a guessed value.
+    $account_id = null;
+    if (!empty($prefix['comments'])
+        && preg_match('/\(([^)]+)\)/', (string)$prefix['comments'], $m)
+        && preg_match('/^\d+$/', trim($m[1]))) {
+        $account_id = (int)trim($m[1]);
+    }
+
+    // Tags are the durable identity of a reservation. The AWS- tag also
+    // carries the environment in the long form the API documents; fall
+    // back to the custom field short code, then null.
+    $tags        = [];
+    $environment = null;
+    foreach ((array)($prefix['tags'] ?? []) as $tag) {
+        $name = is_array($tag) ? ($tag['name'] ?? null) : $tag;
+        if (!is_string($name) || $name === '') {
+            continue;
+        }
+        $tags[] = $name;
+        if ($environment === null && str_starts_with(strtoupper($name), 'AWS-')) {
+            $environment = strtolower(strtoupper($name));
+        }
+    }
+    if ($environment === null) {
+        $env_cf = $prefix['custom_fields']['environment'] ?? null;
+        if (is_string($env_cf) && $env_cf !== '') {
+            $environment = $env_cf;
+        }
+    }
+
+    return [
+        'account'      => $account,
+        'account_id'   => $account_id,
+        'environment'  => $environment,
+        'region'       => $region,
+        'container'    => format_container_name($account, $region),
+        'block_result' => [[
+            'blockAddr' => $blockAddr,
+            'blockSize' => $blockSize
+        ]],
+        'tags'         => $tags
+    ];
 }
 
 /**
